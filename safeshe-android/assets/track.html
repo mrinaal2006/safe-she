@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>SafeShe Live Trip</title>
+<link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+<style>
+  :root { --accent: #0f9d58; --text: #17201b; --muted: #66736b; --line: #dfe7e2; --danger: #e53935; }
+  html, body { margin: 0; height: 100%; font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--text); background: #fff; }
+  #map { position: fixed; inset: 0; background: #eef2ef; }
+  .bar { position: fixed; top: 0; left: 0; right: 0; z-index: 500; background: #fff; padding: 10px 16px; box-shadow: 0 1px 8px #0000001a; font-weight: 800; font-size: 20px; }
+  .bar span { color: var(--accent); } .bar small { font-weight: 500; color: var(--muted); font-size: 13px; margin-left: 6px; }
+  .card { position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 500; background: #fff; border-radius: 16px; padding: 14px 16px; box-shadow: 0 6px 24px #00000026; max-width: 520px; margin: 0 auto; }
+  .card h2 { margin: 0 0 4px; font-size: 18px; } .muted { color: var(--muted); font-size: 13px; }
+  .plate { display: inline-block; font-family: ui-monospace, monospace; font-weight: 700; background: #fffbe6; border: 1px solid #222; padding: 0 6px; border-radius: 4px; }
+  .mk { font-size: 26px; filter: drop-shadow(0 2px 2px #0006); }
+  .dot { width: 18px; height: 18px; border-radius: 50%; border: 4px solid #fff; }
+  a.call { display: inline-block; margin-top: 10px; background: var(--danger); color: #fff; text-decoration: none; padding: 8px 14px; border-radius: 10px; font-weight: 700; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="bar">Safe<span>She</span><small>live trip</small></div>
+<div class="card"><h2 id="title">Loading trip…</h2><div id="info" class="muted"></div><div id="upd" class="muted"></div>
+  <a class="call" href="tel:112">📞 Emergency: call 112</a></div>
+<script src="/vendor/leaflet/leaflet.js"></script>
+<script>
+(function () {
+  var token = location.pathname.split("/").pop();
+  var map = L.map("map", { zoomControl: false }).setView([20.59, 78.96], 5);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap contributors" }).addTo(map);
+  function ic(html) { return L.divIcon({ className: "", html: html, iconSize: [28, 28], iconAnchor: [14, 14] }); }
+  var car = null, fitted = false, VEH = { bike: "🏍️", auto: "🛺", cab: "🚗", pink: "🚘" };
+  var STATUS = { requested: "Looking for a rider", accepted: "Rider is on the way to pickup", arrived: "Rider has arrived at pickup", started: "Trip in progress", completed: "Trip completed safely ✅", cancelled: "Trip was cancelled", no_driver: "No rider was found" };
+  function $(id) { return document.getElementById(id); }
+  function load() {
+    fetch("/api/track/" + encodeURIComponent(token)).then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || "Link expired"); return j; }); }).then(function (t) {
+      $("title").textContent = (t.passenger.name ? t.passenger.name + ": " : "") + (STATUS[t.status] || t.status);
+      $("info").innerHTML = "";
+      if (t.driver) {
+        $("info").appendChild(document.createTextNode("Rider " + t.driver.name + " · " + (t.driver.vehicleModel || "") + " "));
+        var p = document.createElement("span"); p.className = "plate"; p.textContent = t.driver.plate || ""; $("info").appendChild(p);
+      }
+      $("info").appendChild(document.createElement("br"));
+      $("info").appendChild(document.createTextNode("To: " + (t.drop.name || "").split(",").slice(0, 2).join(",")));
+      if (!fitted) {
+        L.marker([t.pickup.lat, t.pickup.lng], { icon: ic('<div class="dot" style="background:#0f9d58"></div>') }).addTo(map);
+        L.marker([t.drop.lat, t.drop.lng], { icon: ic('<div class="dot" style="background:#e53935"></div>') }).addTo(map);
+      }
+      if (t.driver && t.driver.lat != null) {
+        var ll = [t.driver.lat, t.driver.lng];
+        if (car) car.setLatLng(ll); else car = L.marker(ll, { icon: ic('<div class="mk">' + (VEH[t.vehicle] || "🚗") + "</div>"), zIndexOffset: 1000 }).addTo(map);
+        $("upd").textContent = "Position updated " + new Date(t.driver.locAt).toLocaleTimeString("en-IN");
+      }
+      if (!fitted) { var pts = [[t.pickup.lat, t.pickup.lng], [t.drop.lat, t.drop.lng]]; if (car) pts.push(car.getLatLng()); map.fitBounds(pts, { padding: [60, 60] }); fitted = true; }
+    }).catch(function (e) { $("title").textContent = e.message; $("info").textContent = "Ask the traveller to share a new link."; });
+  }
+  load(); setInterval(load, 5000);
+})();
+</script>
+</body>
+</html>

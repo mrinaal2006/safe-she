@@ -1,0 +1,13 @@
+node_modules/
+.env
+.env.*
+!.env.example
+safeshe-server/public/
+safeshe-server/.vercel/
+safeshe-server/data/
+safeshe-android/build/
+work/
+*.jks
+*.keystore
+*.pass
+.DS_Store

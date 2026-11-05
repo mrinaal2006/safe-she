@@ -1,0 +1,23 @@
+# Render blueprint (alternative to Vercel): web service + managed Postgres.
+services:
+  - type: web
+    name: safeshe-server
+    runtime: docker
+    dockerfilePath: ./safeshe-server/Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: { name: safeshe-db, property: connectionString }
+      - key: ADMIN_USERNAME
+        value: Administrator
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: TWOFACTOR_API_KEY
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
+databases:
+  - name: safeshe-db
+    plan: basic-256mb

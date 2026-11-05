@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SafeShe Rides</title>
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<!-- ======================= server setup (APK without a baked-in server URL) ======================= -->
+<section class="screen center" id="scr-server" hidden>
+  <div class="authbox">
+    <div class="logo">Safe<span>She</span></div>
+    <h2>Connect to your SafeShe server</h2>
+    <p class="muted small">Enter the address of the SafeShe server, e.g. https://safeshe.example.com</p>
+    <input id="serverUrl" type="url" placeholder="https://your-server.com" autocomplete="off" inputmode="url">
+    <button class="primary wide" id="btnServerSave">Connect</button>
+    <div class="status" id="serverStatus"></div>
+  </div>
+</section>
+
+<!-- ======================= welcome / role ======================= -->
+<section class="screen center" id="scr-welcome" hidden>
+  <div class="authbox">
+    <div class="logo big">Safe<span>She</span></div>
+    <p class="tagline">Safe rides, every time.</p>
+    <button class="rolecard" data-role="passenger"><span class="ri">🧍‍♀️</span><span><b>Book a ride</b><small>Bike, auto and cab rides with built-in safety</small></span></button>
+    <button class="rolecard" data-role="driver"><span class="ri">🏍️</span><span><b>Drive as a Rider</b><small>Earn with your bike, auto or cab</small></span></button>
+    <button class="link" id="btnAdminLogin">Admin login</button>
+  </div>
+</section>
+
+<!-- ======================= login ======================= -->
+<section class="screen center" id="scr-login" hidden>
+  <div class="authbox">
+    <button class="link back-top" id="btnLoginBack">← Back</button>
+    <div class="logo">Safe<span>She</span></div>
+    <div id="loginPhone">
+      <h2 id="loginTitle">Log in with your phone</h2>
+      <label class="small muted" for="phoneInput">Mobile number</label>
+      <div class="phonefield"><span>+91</span><input id="phoneInput" type="tel" inputmode="numeric" maxlength="10" placeholder="98765 43210" autocomplete="tel-national"></div>
+      <button class="primary wide" id="btnSendOtp">Send OTP</button>
+    </div>
+    <div id="loginOtp" hidden>
+      <h2>Enter the 6-digit OTP</h2>
+      <p class="muted small" id="otpSentTo"></p>
+      <input id="otpInput" class="otpinput" type="tel" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="••••••">
+      <div class="testcode" id="testCode" hidden></div>
+      <button class="primary wide" id="btnVerifyOtp">Verify &amp; continue</button>
+      <div class="between small"><button class="link" id="btnChangePhone">Change number</button><button class="link" id="btnResend" disabled>Resend OTP</button></div>
+    </div>
+    <div id="loginAdmin" hidden>
+      <h2>Admin login</h2>
+      <label class="small muted" for="adminUser">Username</label>
+      <input id="adminUser" type="text" autocomplete="username" autocapitalize="off">
+      <label class="small muted" for="adminPass">Password</label>
+      <input id="adminPass" type="password" autocomplete="current-password">
+      <button class="primary wide" id="btnAdminDoLogin">Log in</button>
+    </div>
+    <div class="status" id="loginStatus"></div>
+  </div>
+</section>
+
+<!-- ======================= passenger profile ======================= -->
+<section class="screen center" id="scr-profile" hidden>
+  <div class="authbox">
+    <h2>Your details</h2>
+    <label class="small muted" for="pfName">Full name</label>
+    <input id="pfName" type="text" maxlength="60" autocomplete="name">
+    <label class="small muted" for="pfGender">Gender (optional)</label>
+    <select id="pfGender"><option value="">Prefer not to say</option><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option></select>
+    <label class="small muted" for="pfEmergency">Emergency contact number (recommended)</label>
+    <div class="phonefield"><span>+91</span><input id="pfEmergency" type="tel" inputmode="numeric" maxlength="10" placeholder="Trusted contact"></div>
+    <p class="muted small">SafeShe pre-fills SOS alerts and trip shares for this contact.</p>
+    <button class="primary wide" id="btnProfileSave">Save &amp; continue</button>
+    <div class="status" id="profileStatus"></div>
+  </div>
+</section>
+
+<!-- ======================= rider (driver) profile ======================= -->
+<section class="screen center" id="scr-driver-profile" hidden>
+  <div class="authbox">
+    <h2>Rider registration</h2>
+    <label class="small muted" for="dpName">Full name (as on licence)</label>
+    <input id="dpName" type="text" maxlength="60">
+    <label class="small muted" for="dpGender">Gender</label>
+    <select id="dpGender"><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option></select>
+    <p class="muted small">Female cab riders also get Pink Cab requests.</p>
+    <label class="small muted">Vehicle type</label>
+    <div class="seg" id="dpVehicle">
+      <button data-v="bike">🏍️ Bike</button><button data-v="auto">🛺 Auto</button><button data-v="cab">🚗 Cab</button>
+    </div>
+    <label class="small muted" for="dpModel">Vehicle model</label>
+    <input id="dpModel" type="text" maxlength="60" placeholder="e.g. Honda Activa / Bajaj RE / Maruti Dzire">
+    <label class="small muted" for="dpPlate">Number plate</label>
+    <input id="dpPlate" type="text" maxlength="20" placeholder="KA 01 AB 1234" autocapitalize="characters">
+    <label class="small muted" for="dpLicense">Driving licence number</label>
+    <input id="dpLicense" type="text" maxlength="30" autocapitalize="characters">
+    <label class="small muted" for="dpEmergency">Emergency contact (optional)</label>
+    <div class="phonefield"><span>+91</span><input id="dpEmergency" type="tel" inputmode="numeric" maxlength="10"></div>
+    <button class="primary wide" id="btnDriverProfileSave">Submit for approval</button>
+    <div class="status" id="driverProfileStatus"></div>
+  </div>
+</section>
+
+<section class="screen center" id="scr-driver-pending" hidden>
+  <div class="authbox">
+    <div class="bigicon">⏳</div>
+    <h2 id="pendTitle">Waiting for approval</h2>
+    <p class="muted" id="pendText">The SafeShe team is reviewing your details. You'll be able to go online as soon as you're approved. This screen updates automatically.</p>
+    <button class="ghost wide" id="btnPendEdit">Edit vehicle details</button>
+    <button class="link" id="btnPendLogout">Log out</button>
+  </div>
+</section>
+
+<!-- ======================= main (map) for passenger + rider ======================= -->
+<section class="screen" id="scr-main" hidden>
+  <div id="map" aria-label="Map"></div>
+  <div class="topbar">
+    <button class="round" id="btnMenu" aria-label="Menu">☰</button>
+    <div class="brand">Safe<span>She</span><small id="roleTag"></small></div>
+    <button class="sos" id="btnSos" aria-label="Emergency SOS, press and hold for instant alert">SOS</button>
+  </div>
+  <button class="round fab" id="btnRecenter" aria-label="Go to my location">◎</button>
+  <div class="netbar" id="netbar" hidden>Reconnecting to server…</div>
+
+  <section class="sheet" id="sheet">
+    <!-- passenger: home -->
+    <div class="view" id="pv-home" hidden>
+      <div class="grip"></div>
+      <h2 id="greet">Where to?</h2>
+      <div class="places">
+        <div class="place" id="pickupRow"><span class="pin green"></span><div><small>Pickup · tap to change</small><div id="pickupText">Finding your location…</div></div></div>
+        <div class="place"><span class="pin red"></span>
+          <form id="searchForm" class="search">
+            <input id="dropInput" type="search" placeholder="Search any destination" autocomplete="off" enterkeyhint="search">
+            <button type="submit" aria-label="Search">🔍</button>
+          </form>
+        </div>
+      </div>
+      <div class="chips" id="savedChips"></div>
+      <ul class="results" id="results"></ul>
+      <button class="ghost wide" id="btnPickOnMap">📍 Choose destination on map</button>
+    </div>
+    <!-- passenger: choose ride -->
+    <div class="view" id="pv-choose" hidden>
+      <div class="grip"></div>
+      <div class="between"><button class="link" id="btnBackHome">← Change</button><span class="muted" id="tripMeta"></span></div>
+      <div class="dest" id="destText"></div>
+      <div class="chips"><button class="chip" id="saveHome">Save as Home</button><button class="chip" id="saveWork">Save as Work</button></div>
+      <ul class="rides" id="rides"></ul>
+      <label class="check"><input type="checkbox" id="optShare" checked> Share live trip link with my emergency contact when the ride starts</label>
+      <div class="between pay">
+        <button class="chip" id="btnPay">💵 Cash</button>
+        <button class="primary" id="btnBook" disabled>Book</button>
+      </div>
+    </div>
+    <!-- passenger: ride status -->
+    <div class="view" id="pv-ride" hidden>
+      <div class="grip"></div>
+      <div class="ridestatus" id="rideStatus"></div>
+      <div id="searchingBox" class="searching" hidden><div class="ring"></div><div><b>Finding a rider near you…</b><p class="muted small" id="searchSub"></p></div></div>
+      <div class="driver" id="driverBox" hidden>
+        <div class="avatar" id="drvAvatar">🧑</div>
+        <div class="dinfo">
+          <strong id="drvName"></strong> <span class="rating" id="drvRating"></span>
+          <div class="muted" id="drvVehicle"></div>
+          <div class="plate" id="drvPlate"></div>
+        </div>
+        <div class="otp"><small>OTP</small><b id="otp"></b></div>
+      </div>
+      <div class="row" id="driverActions" hidden><button class="ghost" id="btnCallDriver">📞 Call rider</button></div>
+      <div class="tripline small muted" id="tripLine"></div>
+      <div class="safety">
+        <div class="between"><strong>🛡️ SafeShe ride protection</strong>
+          <label class="switch" title="Trip monitor"><input type="checkbox" id="tripMonitor" checked><span class="slider"></span></label></div>
+        <p class="muted small" id="tripMonitorText">Trip monitor on: if you leave the app, SafeShe checks on you when you return.</p>
+        <div class="grid3">
+          <button id="btnTripRec">🎙️<span>Record</span></button>
+          <button id="btnTripShare">📤<span>Share trip</span></button>
+          <button id="btnTripSos" class="danger">🆘<span>SOS</span></button>
+        </div>
+      </div>
+      <button class="ghost wide" id="btnCancelRide">Cancel ride</button>
+    </div>
+    <!-- passenger: finished -->
+    <div class="view" id="pv-done" hidden>
+      <div class="grip"></div>
+      <h2 id="doneTitle">You've arrived 🎉</h2>
+      <div class="fare"><span>Total fare</span><b id="doneFare"></b></div>
+      <p class="muted" id="doneMeta"></p>
+      <div id="rateBox"><p>Rate your rider</p><div class="stars" id="stars"></div></div>
+      <button class="primary wide" id="btnDone">Done</button>
+    </div>
+
+    <!-- rider: home -->
+    <div class="view" id="dv-home" hidden>
+      <div class="grip"></div>
+      <div class="between">
+        <div><h2 id="dvTitle" style="margin:0">You're offline</h2><p class="muted small" id="dvSub" style="margin:2px 0 0">Go online to receive ride requests.</p></div>
+        <label class="switch big" title="Online"><input type="checkbox" id="onlineToggle"><span class="slider"></span></label>
+      </div>
+      <div class="stats3">
+        <div><small>Today</small><b id="earnToday">₹0</b></div>
+        <div><small>Rides</small><b id="ridesToday">0</b></div>
+        <div><small>Rating</small><b id="myRating">–</b></div>
+      </div>
+      <ul class="offers" id="offers"></ul>
+      <p class="muted small" id="dvHint">Keep SafeShe open while online. The screen stays on so ride requests and your location keep updating.</p>
+    </div>
+    <!-- rider: active ride -->
+    <div class="view" id="dv-ride" hidden>
+      <div class="grip"></div>
+      <div class="ridestatus" id="dRideStatus"></div>
+      <div class="driver">
+        <div class="avatar">🧍</div>
+        <div class="dinfo"><strong id="dPassName"></strong><div class="muted small" id="dPayment"></div></div>
+        <div class="otp"><small>Fare</small><b id="dFare"></b></div>
+      </div>
+      <div class="places" style="margin-top:10px">
+        <div class="place"><span class="pin green"></span><div><small>Pickup</small><div id="dPickup"></div></div></div>
+        <div class="place"><span class="pin red"></span><div><small>Drop</small><div id="dDrop"></div></div></div>
+      </div>
+      <div class="row"><button class="ghost" id="btnCallPass">📞 Call</button><button class="ghost" id="btnNavigate">🧭 Navigate</button></div>
+      <div id="otpEntry" hidden>
+        <label class="small muted" for="startOtp">Ask the passenger for the 4-digit ride OTP</label>
+        <input id="startOtp" class="otpinput small" type="tel" inputmode="numeric" maxlength="4" placeholder="••••">
+      </div>
+      <button class="primary wide" id="btnRideStep"></button>
+      <button class="ghost wide" id="btnDriverCancel">Cancel ride</button>
+    </div>
+  </section>
+</section>
+
+<!-- ======================= admin ======================= -->
+<section class="screen" id="scr-admin" hidden>
+  <header class="adminbar">
+    <div class="brand">Safe<span>She</span><small>admin</small></div>
+    <button class="ghost small" id="btnAdminLogout">Log out</button>
+  </header>
+  <nav class="tabs" id="adminTabs">
+    <button data-tab="dash" class="on">Dashboard</button><button data-tab="sos">SOS</button><button data-tab="riders">Riders</button>
+    <button data-tab="rides">Rides</button><button data-tab="users">Users</button><button data-tab="fares">Fares</button><button data-tab="settings">Settings</button>
+  </nav>
+  <div class="admincontent" id="adminContent"></div>
+</section>
+
+<!-- ======================= side menu + pages ======================= -->
+<div class="scrim" id="scrim"></div>
+<nav class="drawer" id="drawer">
+  <div class="brand big">Safe<span>She</span></div>
+  <div class="me" id="meBox"></div>
+  <button data-page="page-account">👤 My account</button>
+  <button data-page="page-safety">🛡️ Safety centre</button>
+  <button data-page="page-history">🧾 My rides</button>
+  <button id="btnLogout">↩ Log out</button>
+</nav>
+
+<div class="page" id="page-account" hidden>
+  <header><button class="link back">←</button><h2>My account</h2></header>
+  <div class="content">
+    <section class="card" id="accountCard"></section>
+    <button class="ghost" id="btnEditProfile">Edit my details</button>
+  </div>
+</div>
+
+<div class="page" id="page-safety" hidden>
+  <header><button class="link back">←</button><h2>Safety centre</h2></header>
+  <div class="content">
+    <section class="card">
+      <h3>👤 Emergency contact</h3>
+      <p class="muted small" id="emergencyText"></p>
+      <button class="ghost" id="btnEditContact">Change contact</button>
+    </section>
+    <section class="card">
+      <div class="between"><h3>🛡️ Trip monitor (always on)</h3>
+        <label class="switch"><input type="checkbox" id="monitor"><span class="slider"></span></label></div>
+      <p class="muted small">Rides turn the monitor on automatically. Switch this on to also get safety checks when you're not on a ride.</p>
+      <div class="status" id="monitorStatus"></div>
+    </section>
+    <section class="card">
+      <h3>🎙️ Voice recording</h3>
+      <p class="muted small">Keep SafeShe open while recording. Android pauses the microphone for apps in the background.</p>
+      <div class="row"><span class="dot" id="recDot"></span><span class="timer" id="recTimer">00:00</span></div>
+      <div class="row">
+        <button class="primary" id="btnRec">● Start recording</button>
+        <button class="ghost" id="btnPlay" disabled>▶ Play</button>
+        <button class="ghost" id="btnSave" disabled>⬇ Download</button>
+      </div>
+      <div class="status" id="recStatus">Microphone permission is requested when you start.</div>
+    </section>
+    <section class="card">
+      <h3>📍 Emergency location sharing</h3>
+      <p class="muted small">Press and hold <b>SOS</b> for 1 second to open an alert SMS with your live location at once. Every SOS is also sent to the SafeShe safety team.</p>
+      <button class="primary" id="btnOpenSos">Open emergency options</button>
+    </section>
+  </div>
+</div>
+
+<div class="page" id="page-history" hidden>
+  <header><button class="link back">←</button><h2>My rides</h2></header>
+  <div class="content"><ul class="history" id="history"></ul></div>
+</div>
+
+<!-- ======================= modals ======================= -->
+<div class="modal" id="check" role="dialog" aria-modal="true" aria-labelledby="checkTitle">
+  <div class="msheet">
+    <h3 id="checkTitle">Everything okay?</h3>
+    <p class="muted" id="checkText"></p>
+    <div class="progress warn"><i id="checkBar"></i></div>
+    <div class="row"><button class="ok" id="btnSafe">I'm safe</button><button class="primary" id="btnAlert">Prepare alert</button></div>
+    <p class="muted small" id="checkCountdown"></p>
+  </div>
+</div>
+
+<div class="modal" id="sosModal" role="dialog" aria-modal="true" aria-labelledby="sosTitle">
+  <div class="msheet">
+    <div class="between"><h3 id="sosTitle">🆘 Emergency</h3><button class="link" id="btnSosClose">Close</button></div>
+    <button class="danger wide big" id="btnCall112">📞 Call 112 (emergency)</button>
+    <p class="hint" id="sosTeamNote">The SafeShe safety team has been alerted with your location.</p>
+    <div class="coords" id="sosLoc">Getting your location…</div>
+    <label class="small muted" for="alertMsg">Alert message for your contact</label>
+    <textarea id="alertMsg"></textarea>
+    <div class="row"><button class="primary" id="btnSms">✉ Send SMS</button><button class="ghost" id="btnShare">Share…</button><button class="ghost" id="btnSosRec">🎙️ Record</button></div>
+    <div class="status" id="sosStatus"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="config.js"></script>
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
