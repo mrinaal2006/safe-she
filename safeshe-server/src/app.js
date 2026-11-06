@@ -286,7 +286,7 @@ function createApp(cfg) {
   app.use('/api', wrap(async (req, res, next) => { await init(); next(); }));
   const ip = req => req.ip || 'unknown';
 
-  app.get('/api/health', wrap(async (req, res) => { await db.one('SELECT 1 AS ok'); res.json({ ok: true, otpTestMode: otp.testMode, time: now() }); }));
+  app.get('/api/health', wrap(async (req, res) => { await db.one('SELECT 1 AS ok'); res.json({ ok: true, otpTestMode: otp.testMode, node: process.version, time: now() }); }));
 
   // ---------------- auth
   app.post('/api/auth/otp/send', wrap(async (req, res) => {
