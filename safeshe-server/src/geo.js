@@ -85,17 +85,22 @@ function createGeo(cfg, log) {
     const photonArea = async () => (await getJson(`${cfg.photonUrl}/api/?limit=${suggest ? 15 : 25}&lang=en&q=${encodeURIComponent(q)}&bbox=${box.join(',')}` +
       `&lat=${near.lat}&lon=${near.lng}&zoom=12&location_bias_scale=0.3`, suggest ? 6000 : 8000)).features.map(f => photonPlace(f, q));
     if (!suggest) {
-      // Full search: Nominatim answers fastest (it may not be used while typing).
+      // Full search: ask Nominatim (fast; not allowed while typing) and Photon at the same time. Use Nominatim's
+      // answer straight away when it found enough places; otherwise wait for Photon (better for shops, malls…).
+      const ph = photonArea().catch(e => { failures++; log(`[geo] photon area search failed: ${e.message}`); return []; });
+      let nm = [];
       try {
         const rs = await nominatim(`/search?format=jsonv2&limit=15&q=${encodeURIComponent(q)}&viewbox=${box[0]},${box[3]},${box[2]},${box[1]}&bounded=1`);
-        out = rs.map(r => ({ name: r.name || r.display_name.split(',')[0], address: r.display_name, lat: +r.lat, lng: +r.lon, type: r.type || '' }));
+        nm = rs.map(r => ({ name: r.name || r.display_name.split(',')[0], address: r.display_name, lat: +r.lat, lng: +r.lon, type: r.type || '' }));
       } catch (e) { failures++; log(`[geo] nominatim area search failed: ${e.message}`); }
-    }
-    if (!out.length && suggest && cfg.geoapifyKey) {
-      try { out = await geoapify(q, near, area, 10, 4000); } catch (e) { failures++; log(`[geo] geoapify failed: ${e.message}`); }
-    }
-    if (!out.length) {
-      try { out = await photonArea(); } catch (e) { failures++; log(`[geo] photon area search failed: ${e.message}`); }
+      out = nm.length >= 3 ? nm : [...(await ph), ...nm];
+    } else {
+      if (cfg.geoapifyKey) {
+        try { out = await geoapify(q, near, area, 10, 4000); } catch (e) { failures++; log(`[geo] geoapify failed: ${e.message}`); }
+      }
+      if (!out.length) {
+        try { out = await photonArea(); } catch (e) { failures++; log(`[geo] photon area search failed: ${e.message}`); }
+      }
     }
     if (!out.length && failures >= (suggest && !cfg.geoapifyKey ? 1 : 2)) throw Object.assign(new Error('Place search is unavailable right now. Choose the destination on the map.'), { status: 503 });
     const seen = new Set(), words = q.toLowerCase().split(/[\s,]+/).filter(w => w.length > 1);
