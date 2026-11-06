@@ -7,8 +7,8 @@ const { sha256, digits, safeEqual } = require('./security');
 const OTP_TTL_MS = 5 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
 const RESEND_GAP_MS = 30 * 1000;
-const MAX_PER_PHONE_HOUR = 5;
-const MAX_PER_IP_HOUR = 20;
+const MAX_PER_PHONE_HOUR = 10;
+const MAX_PER_IP_HOUR = 100;
 
 const err = (status, message) => Object.assign(new Error(message), { status });
 
@@ -42,7 +42,7 @@ function createOtpService(db, cfg, log) {
                             FROM otp_sends WHERE phone = $1 OR ip = $2`, [phone, ip]);
     const last = (await db.one('SELECT MAX(at) AS t FROM otp_sends WHERE phone = $1', [phone])).t;
     if (last && now - last < RESEND_GAP_MS) throw err(429, `Please wait ${Math.ceil((RESEND_GAP_MS - (now - last)) / 1000)} s before requesting another OTP.`);
-    if (s.per_phone >= MAX_PER_PHONE_HOUR || s.per_ip >= MAX_PER_IP_HOUR) throw err(429, 'Too many OTP requests. Try again in an hour.');
+    if (s.per_phone >= MAX_PER_PHONE_HOUR || s.per_ip >= MAX_PER_IP_HOUR) throw err(429, 'Too many OTP codes requested for this number. Please try again later.');
 
     const code = digits(6);
     await deliver(phone, code);

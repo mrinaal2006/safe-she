@@ -85,6 +85,10 @@ async function step(name, fn) {
     assert.equal((await api('POST', '/api/driver/online', { online: true, ...BLR }, D.token)).status, 403);
   });
   await step('admin wrong password rejected', async () => { assert.equal((await api('POST', '/api/admin/login', { username: 'Administrator', password: 'nope' })).status, 401); });
+  await step('no "too many requests" for normal use: 15 correct admin logins in a row', async () => {
+    for (let i = 0; i < 15; i++) assert.ok((await api('POST', '/api/admin/login', { username: 'Administrator', password: 'test-admin-pass' })).token, 'login ' + (i + 1));
+    assert.equal((await api('POST', '/api/admin/login', { username: 'Administrator', password: 'nope' })).status, 401, 'wrong password is 401, not 429');
+  });
   await step('admin login + approve rider (live event to rider)', async () => {
     A = await api('POST', '/api/admin/login', { username: 'Administrator', password: 'test-admin-pass' });
     assert.ok(A.token);

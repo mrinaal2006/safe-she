@@ -290,7 +290,6 @@ function createApp(cfg) {
 
   // ---------------- auth
   app.post('/api/auth/otp/send', wrap(async (req, res) => {
-    await rateLimit('otp:' + ip(req), 30, 3600_000);
     const phone = sec.normalizePhone(req.body.phone), role = req.body.role;
     if (!phone) throw httpError(400, 'Enter a valid 10-digit Indian mobile number.');
     if (!['passenger', 'driver'].includes(role)) throw httpError(400, 'Invalid account type.');
@@ -300,7 +299,6 @@ function createApp(cfg) {
     res.json({ ok: true, phone, testMode: r.testMode, devCode: cfg.showTestOtpInApp ? r.devCode : undefined, expiresInSec: r.expiresInSec });
   }));
   app.post('/api/auth/otp/verify', wrap(async (req, res) => {
-    await rateLimit('verify:' + ip(req), 60, 3600_000);
     const phone = sec.normalizePhone(req.body.phone), role = req.body.role;
     if (!phone || !['passenger', 'driver'].includes(role)) throw httpError(400, 'Invalid request.');
     await otp.verify(phone, role, str(req.body.code, 10));
@@ -313,11 +311,19 @@ function createApp(cfg) {
     res.json({ token: await issueSession('user', u.id), user: await publicUser(u) });
   }));
   app.post('/api/admin/login', wrap(async (req, res) => {
-    await rateLimit('adminlogin:' + ip(req), 10, 15 * 60_000);
+    // Only WRONG passwords are counted (30 per 15 minutes per IP) to stop password guessing; correct logins are never limited.
+    const failKey = 'adminfail:' + ip(req);
+    const fails = await db.one('SELECT n FROM rate_limits WHERE key = $1 AND reset_at > $2', [failKey, now()]);
+    if (fails && fails.n >= 30) throw httpError(429, 'Too many wrong passwords. Please wait 15 minutes and try again.');
     // Log in with the username or the admin email.
     const id = str(req.body.username, 200);
     const a = await db.one('SELECT * FROM admins WHERE username = $1 OR (email IS NOT NULL AND LOWER(email) = LOWER($1)) LIMIT 1', [id]);
-    if (!a || !sec.verifyPassword(String(req.body.password || ''), a.pass_hash)) { log(`[admin] failed login from ${ip(req)}`); throw httpError(401, 'Wrong username/email or password.'); }
+    if (!a || !sec.verifyPassword(String(req.body.password || ''), a.pass_hash)) {
+      log(`[admin] failed login from ${ip(req)}`);
+      await rateLimit(failKey, 1e9, 15 * 60_000); // count the failure only
+      throw httpError(401, 'Wrong username/email or password.');
+    }
+    await db.exec('DELETE FROM rate_limits WHERE key = $1', [failKey]);
     res.json({ token: await issueSession('admin', a.id), admin: { id: a.id, username: a.username, email: a.email } });
   }));
   app.post('/api/logout', wrap(async (req, res) => {
@@ -375,12 +381,10 @@ function createApp(cfg) {
 
   // ---------------- geo
   app.get('/api/geo/search', auth(), wrap(async (req, res) => {
-    await rateLimit('geo:' + req.user.id, 60, 60_000);
     const near = req.query.lat ? point({ lat: req.query.lat, lng: req.query.lng }) : null;
     res.json({ results: await geo.search(req.query.q, near) });
   }));
   app.get('/api/geo/reverse', auth(), wrap(async (req, res) => {
-    await rateLimit('geo:' + req.user.id, 60, 60_000);
     const p = point(req.query); if (!p) throw httpError(400, 'Invalid location.');
     res.json(await geo.reverse(p.lat, p.lng));
   }));
@@ -528,7 +532,6 @@ function createApp(cfg) {
       rides: recent.map(r => ({ id: r.id, vehicle: r.vehicle, fare: r.fare, commission: r.commission, completedAt: r.completed_at })) });
   }));
   app.post('/api/driver/payments', auth('driver'), wrap(async (req, res) => {
-    await rateLimit('pay:' + req.user.id, 10, 3600_000);
     const amount = num(req.body.amount, 1, 100000);
     const utr = str(req.body.utr, 40).replace(/\s+/g, '').toUpperCase();
     if (!amount) throw httpError(400, 'Enter the amount you paid.');
@@ -548,7 +551,6 @@ function createApp(cfg) {
       user: u && { id: u.id, name: u.name, phone: u.phone, role: u.role, emergencyPhone: u.emergency_phone }, ride: r ? rideView(r, 'admin') : null };
   }
   app.post('/api/sos', auth(), wrap(async (req, res) => {
-    await rateLimit('sos:' + req.user.id, 20, 3600_000);
     const p = point(req.body) || {};
     const ride = await activeRideFor(req.user.id, req.user.role);
     const s = await db.one('INSERT INTO sos (user_id, ride_id, lat, lng, accuracy, message, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
@@ -558,7 +560,6 @@ function createApp(cfg) {
     res.json({ ok: true, id: s.id });
   }));
   app.get('/api/track/:token', wrap(async (req, res) => {
-    await rateLimit('track:' + ip(req), 120, 60_000);
     const r = await db.one(RIDE_SELECT + ' WHERE r.share_token = $1', [str(req.params.token, 40)]);
     const fresh = r && (ACTIVE.includes(r.status) || (r.completed_at || r.cancelled_at || 0) > now() - 30 * 60_000);
     if (!fresh) return res.status(404).json({ error: 'This tracking link has expired.' });
@@ -713,7 +714,6 @@ function createApp(cfg) {
   app.get('/api/admin/otps', admin, wrap(async (req, res) => res.json({ testMode: otp.testMode, codes: await otp.recentTestCodes() })));
   app.get('/api/admin/sms-status', admin, wrap(async (req, res) => res.json(await otp.smsStatus())));
   app.post('/api/admin/sms-test', admin, wrap(async (req, res) => {
-    await rateLimit('smstest:' + req.s.admin.id, 5, 3600_000);
     const phone = sec.normalizePhone(req.body.phone);
     if (!phone) throw httpError(400, 'Enter a valid 10-digit Indian mobile number.');
     await otp.sendTest(phone);
