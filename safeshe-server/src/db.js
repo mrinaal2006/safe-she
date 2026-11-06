@@ -198,6 +198,8 @@ const SCHEMA = `
     received_at BIGINT NOT NULL, created_at BIGINT NOT NULL, payment_id BIGINT
   );
   CREATE UNIQUE INDEX IF NOT EXISTS bank_alerts_utr ON bank_alerts (utr);
+  -- Place-search cache shared by all server instances (same search = instant answer).
+  CREATE TABLE IF NOT EXISTS geo_cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, at BIGINT NOT NULL);
 `;
 
 function connectionString(env) {

@@ -3,19 +3,27 @@
 //  - requests carry a proper User-Agent/contact, as OpenStreetMap services require;
 //  - results are cached (fewer requests, faster repeat searches);
 //  - the app can switch providers later without an app update.
-// Search: Nominatim first (worldwide, no area restriction), Photon as fallback.
+// Search while typing: Geoapify autocomplete when GEOAPIFY_KEY is set (fast), else Photon (free, can be slow).
+// Full search (Enter / 🔍): Nominatim first (fast, not allowed for as-you-type), then Photon.
+// Results are cached in memory and, when a store is given, in the database (shared by all server instances).
 // Routes: OSRM; if unreachable, a straight-line estimate (marked approx).
 
 const cache = new Map();
 const MAX_CACHE = 2000;
-function cached(key, ttlMs, fn) {
+let store = null; // optional shared cache: { get(key, maxAgeMs) -> value|null, set(key, value) }
+async function cached(key, ttlMs, fn) {
   const hit = cache.get(key);
-  if (hit && Date.now() - hit.at < ttlMs) return Promise.resolve(hit.value);
-  return fn().then(v => {
-    if (cache.size >= MAX_CACHE) cache.delete(cache.keys().next().value);
-    cache.set(key, { at: Date.now(), value: v });
-    return v;
-  });
+  if (hit && Date.now() - hit.at < ttlMs) return hit.value;
+  let v = null;
+  const shared = store && key.startsWith('s|'); // only place searches go to the shared cache
+  if (shared) { try { v = await store.get(key, ttlMs); } catch (e) { v = null; } }
+  if (v == null) {
+    v = await fn();
+    if (shared && Array.isArray(v) && v.length) store.set(key, v).catch(() => {});
+  }
+  if (cache.size >= MAX_CACHE) cache.delete(cache.keys().next().value);
+  cache.set(key, { at: Date.now(), value: v });
+  return v;
 }
 
 function haversineKm(a, b) {
@@ -26,6 +34,7 @@ function haversineKm(a, b) {
 }
 
 function createGeo(cfg, log) {
+  if (cfg.cacheStore) store = cfg.cacheStore;
   const UA = `SafeShe-Rides/1.0 (${cfg.contactEmail || 'admin@safeshe.local'})`;
   let lastNominatim = 0; // Nominatim policy: max 1 request per second
   async function getJson(url, ms = 8000) {
@@ -58,22 +67,37 @@ function createGeo(cfg, log) {
     return [c.lng - dLng, c.lat - dLat, c.lng + dLng, c.lat + dLat].map(v => v.toFixed(5));
   }
 
+  /** Geoapify autocomplete (only with GEOAPIFY_KEY): fast suggestions while typing. */
+  async function geoapify(q, near, area, limit, ms) {
+    let u = `${cfg.geoapifyUrl || 'https://api.geoapify.com'}/v1/geocode/autocomplete?format=json&lang=en&limit=${limit}&text=${encodeURIComponent(q)}&apiKey=${encodeURIComponent(cfg.geoapifyKey)}`;
+    if (area) u += `&filter=circle:${area.lng},${area.lat},${Math.round(area.radiusKm * 1000)}`;
+    else u += '&filter=countrycode:in';
+    if (near) u += `&bias=proximity:${near.lng},${near.lat}`;
+    const j = await getJson(u, ms);
+    return (j.results || []).map(r => ({ name: r.name || r.address_line1 || r.formatted, address: r.formatted || r.address_line1 || '', lat: +r.lat, lng: +r.lon, type: r.result_type || '' }))
+      .filter(o => Number.isFinite(o.lat) && Number.isFinite(o.lng));
+  }
+
   /** Search only inside a service region (circle): all matching places in that city, nearest first. */
   async function searchInArea(q, near, suggest, area) {
     const box = bbox(area, area.radiusKm);
     let out = [], failures = 0;
-    try {
-      const fc = await getJson(`${cfg.photonUrl}/api/?limit=${suggest ? 15 : 25}&lang=en&q=${encodeURIComponent(q)}&bbox=${box.join(',')}` +
-        `&lat=${near.lat}&lon=${near.lng}&zoom=12&location_bias_scale=0.3`, suggest ? 5000 : 8000);
-      out = (fc.features || []).map(f => photonPlace(f, q));
-    } catch (e) { failures++; log(`[geo] photon area search failed: ${e.message}`); }
-    if (!out.length && !suggest) {
+    const photonArea = async () => (await getJson(`${cfg.photonUrl}/api/?limit=${suggest ? 15 : 25}&lang=en&q=${encodeURIComponent(q)}&bbox=${box.join(',')}` +
+      `&lat=${near.lat}&lon=${near.lng}&zoom=12&location_bias_scale=0.3`, suggest ? 6000 : 8000)).features.map(f => photonPlace(f, q));
+    if (!suggest) {
+      // Full search: Nominatim answers fastest (it may not be used while typing).
       try {
         const rs = await nominatim(`/search?format=jsonv2&limit=15&q=${encodeURIComponent(q)}&viewbox=${box[0]},${box[3]},${box[2]},${box[1]}&bounded=1`);
         out = rs.map(r => ({ name: r.name || r.display_name.split(',')[0], address: r.display_name, lat: +r.lat, lng: +r.lon, type: r.type || '' }));
       } catch (e) { failures++; log(`[geo] nominatim area search failed: ${e.message}`); }
     }
-    if (!out.length && failures >= (suggest ? 1 : 2)) throw Object.assign(new Error('Place search is unavailable right now. Choose the destination on the map.'), { status: 503 });
+    if (!out.length && suggest && cfg.geoapifyKey) {
+      try { out = await geoapify(q, near, area, 10, 4000); } catch (e) { failures++; log(`[geo] geoapify failed: ${e.message}`); }
+    }
+    if (!out.length) {
+      try { out = await photonArea(); } catch (e) { failures++; log(`[geo] photon area search failed: ${e.message}`); }
+    }
+    if (!out.length && failures >= (suggest && !cfg.geoapifyKey ? 1 : 2)) throw Object.assign(new Error('Place search is unavailable right now. Choose the destination on the map.'), { status: 503 });
     const seen = new Set(), words = q.toLowerCase().split(/[\s,]+/).filter(w => w.length > 1);
     out = out.filter(o => haversineKm(area, o) <= area.radiusKm * 1.02)
       .filter(o => { const k = o.name.toLowerCase() + '|' + o.lat.toFixed(3) + ',' + o.lng.toFixed(3); if (seen.has(k)) return false; seen.add(k); return true; });
@@ -89,7 +113,10 @@ function createGeo(cfg, log) {
     return cached(key, 24 * 3600_000, async () => {
       if (area) return searchInArea(q, near || area, suggest, area);
       let out = [], failures = 0;
-      try {
+      if (suggest && cfg.geoapifyKey) {
+        try { out = await geoapify(q, near, null, 8, 4000); } catch (e) { failures++; log(`[geo] geoapify failed: ${e.message}`); }
+      }
+      if (!out.length) try {
         // Two lookups in parallel: places near the user, and the best-known matches anywhere (so "India Gate"
         // from Bengaluru still finds New Delhi). Mix them: nearby first, then famous/global ones.
         const base = `${cfg.photonUrl}/api/?limit=${suggest ? 6 : 10}&lang=en&q=${encodeURIComponent(q)}`;

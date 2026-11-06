@@ -451,6 +451,29 @@ async function step(name, fn) {
     const r = await api('GET', '/api/geo/search?q=Koramangala', null, P.token);
     assert.equal(r.status, 503); assert.match(r.error, /map/);
   });
+  await step('place search: Geoapify while typing (with key), Nominatim first on Enter, shared cache', async () => {
+    const calls = [];
+    const stub = http.createServer((req, res) => {
+      calls.push(req.url); res.setHeader('Content-Type', 'application/json');
+      if (req.url.startsWith('/v1/geocode/autocomplete')) return res.end(JSON.stringify({ results: [{ name: 'Brigade Road', formatted: 'Brigade Road, Bengaluru, Karnataka', lat: 12.9719, lon: 77.6070, result_type: 'street' }] }));
+      if (req.url.startsWith('/search')) return res.end(JSON.stringify([{ name: 'Brigade Road', display_name: 'Brigade Road, Shanthala Nagar, Bengaluru', lat: '12.9716', lon: '77.6068', type: 'road' }]));
+      res.statusCode = 404; res.end('{}');
+    });
+    await new Promise(r => stub.listen(0, r)); const su = 'http://127.0.0.1:' + stub.address().port;
+    const cfg2 = loadConfig({ ...process.env, DATABASE_URL: cfg.databaseUrl, ADMIN_PASSWORD: 'x', GEOAPIFY_KEY: 'test-key', GEOAPIFY_URL: su, NOMINATIM_URL: su, PHOTON_URL: 'http://127.0.0.1:9', OSRM_URL: 'http://127.0.0.1:9' });
+    const S3 = createApp(cfg2); const s3 = http.createServer(S3.app); await new Promise(r => s3.listen(0, r));
+    const base = 'http://127.0.0.1:' + s3.address().port, h = { headers: { Authorization: 'Bearer ' + P.token } };
+    const sug = await fetch(base + '/api/geo/search?q=brigade%20ro&suggest=1&region=1&lat=12.97&lng=77.59', h).then(x => x.json());
+    assert.equal(sug.results[0].name, 'Brigade Road'); assert.ok(calls.some(u => u.startsWith('/v1/geocode/autocomplete') && /filter=circle/.test(u)), 'geoapify used while typing');
+    const full = await fetch(base + '/api/geo/search?q=brigade%20road&region=1&lat=12.97&lng=77.59', h).then(x => x.json());
+    assert.equal(full.results[0].address, 'Brigade Road, Shanthala Nagar, Bengaluru'); assert.ok(calls.some(u => u.startsWith('/search')), 'nominatim first on Enter');
+    // another instance answers the same search from the shared cache, without calling the provider
+    s3.close(); await S3.close();
+    const n = calls.length, S4 = createApp(cfg2); const s4 = http.createServer(S4.app); await new Promise(r => s4.listen(0, r));
+    const again = await fetch('http://127.0.0.1:' + s4.address().port + '/api/geo/search?q=brigade%20ro&suggest=1&region=1&lat=12.97&lng=77.59', h).then(x => x.json());
+    assert.equal(again.results[0].name, 'Brigade Road'); assert.equal(calls.length, n, 'served from the shared cache');
+    s4.close(); await S4.close(); stub.close();
+  });
   await step('a second app instance (like another serverless instance) shares state', async () => {
     const S2 = createApp(cfg); const s2 = http.createServer(S2.app); await new Promise(r => s2.listen(0, r));
     const r = await fetch('http://127.0.0.1:' + s2.address().port + '/api/me', { headers: { Authorization: 'Bearer ' + P.token } }).then(x => x.json());

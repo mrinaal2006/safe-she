@@ -517,20 +517,39 @@
     var url = "/api/geo/search?q=" + encodeURIComponent(q.toLowerCase()) + near + reg + (suggest ? "&suggest=1" : "");
     // Results already fetched in this session show instantly (e.g. after backspace).
     var hit = searchCache[url];
-    if (!hit && (!suggest || !list.children.length)) { list.innerHTML = ""; list.appendChild(el("li", { class: "muted", text: "Searching…" })); }
+    if (!hit) {
+      // Instant: narrow down results we already have for the start of this text (e.g. "brigade" → "brigade r").
+      var pre = prefixResults(q, near + reg);
+      if (pre && pre.length) showResults(pre, true);
+      else if (!suggest || !list.children.length) { list.innerHTML = ""; list.appendChild(el("li", { class: "muted", text: "Searching…" })); }
+    }
     (hit ? Promise.resolve(hit) : api("GET", url).then(function (r) {
       searchCache[url] = r; searchCacheKeys.push(url); if (searchCacheKeys.length > 80) delete searchCache[searchCacheKeys.shift()];
+      if (r.results.length) recentResults.unshift({ q: q.toLowerCase(), ctx: near + reg, results: r.results }); recentResults.length = Math.min(recentResults.length, 30);
       return r;
     })).then(function (r) {
       if (seq !== searchSeq) return; // a newer search is running
-      list.innerHTML = "";
-      if (!r.results.length) { list.appendChild(el("li", { class: "muted", text: suggest ? "Keep typing, or press 🔍 to search everywhere." : "No places found. Try another spelling, add the city, or choose on the map." })); return; }
-      r.results.forEach(function (x) {
-        list.appendChild(el("li", { onclick: function () { list.innerHTML = ""; $("dropInput").value = x.name; setDrop([x.lat, x.lng], x.name || shortName(x.address)); } },
-          el("b", { text: x.name }), el("span", { class: "muted", text: (x.distanceKm != null ? x.distanceKm + " km · " : "") + x.address })));
-      });
-      syncSheet();
+      if (!r.results.length) { list.innerHTML = ""; list.appendChild(el("li", { class: "muted", text: suggest ? "Keep typing, or press 🔍 to search." : "No places found. Try another spelling, add the city, or choose on the map." })); return; }
+      showResults(r.results);
     }).catch(function (err) { if (seq !== searchSeq) return; list.innerHTML = ""; list.appendChild(el("li", { class: "muted", text: err.message })); });
+  }
+  var recentResults = [];
+  function prefixResults(q, ctx) {
+    q = q.toLowerCase();
+    var base = recentResults.filter(function (x) { return x.ctx === ctx && q.indexOf(x.q) === 0 && x.q.length < q.length; })
+      .sort(function (a, b) { return b.q.length - a.q.length; })[0];
+    if (!base) return null;
+    var words = q.split(/[\s,]+/).filter(Boolean);
+    return base.results.filter(function (x) { var t = (x.name + " " + x.address).toLowerCase(); return words.every(function (w) { return t.indexOf(w) >= 0; }); });
+  }
+  function showResults(results, prelim) {
+    var list = $("results"); list.innerHTML = "";
+    results.forEach(function (x) {
+      list.appendChild(el("li", { onclick: function () { searchSeq++; list.innerHTML = ""; $("dropInput").value = x.name; setDrop([x.lat, x.lng], x.name || shortName(x.address)); } },
+        el("b", { text: x.name }), el("span", { class: "muted", text: (x.distanceKm != null ? x.distanceKm + " km · " : "") + x.address })));
+    });
+    if (prelim) list.appendChild(el("li", { class: "muted small", text: "Looking for more…" }));
+    syncSheet();
   }
   $("dropInput").addEventListener("input", function () {
     clearTimeout(suggestTimer);

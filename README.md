@@ -26,12 +26,18 @@ allowed), drawn with MapLibre. Devices without WebGL fall back to OpenStreetMap 
 made for search-as-you-type), with Nominatim as a fallback. To use another provider later, set `TILE_STYLE` (vector)
 or `TILE_URL` (raster) on the server.
 
+**Faster destination search (optional, free):** the free Photon service often takes 2–5 s per search. For quick
+suggestions while typing, sign up at **geoapify.com** (free plan: 3,000 searches/day), create an API key and add it in
+Vercel as **`GEOAPIFY_KEY`**, then Redeploy. Without it, SafeShe still speeds things up: the list narrows instantly as
+you type using results it already has, the 🔍 button uses Nominatim (fast), and every search is cached in the database
+so repeat searches by anyone are instant.
+
 | Folder | What it is |
 |---|---|
 | `api/`, `vercel.json`, `package.json` | Vercel deployment from the repository root |
 | [`safeshe-server/`](safeshe-server/README.md) | Server code (Express + Postgres) and its tests |
 | [`safeshe-android/`](safeshe-android/README.md) | Android app (WebView app + native recording, location, SMS, dialling) |
-| `outputs/SafeShe-5.1.apk` | Latest signed APK. It connects to the built-in server address. |
+| `outputs/SafeShe-5.2.apk` | Latest signed APK. It connects to the built-in server address. |
 
 ## Deploy on Vercel
 1. **Import:** vercel.com → **Add New → Project** → import `safe-she`.
@@ -124,7 +130,7 @@ reference (UTR) and sender UPI ID. A rider's payment with the **same UTR and amo
 a business/merchant UPI ID works best.
 
 ## Android app
-Install `outputs/SafeShe-5.1.apk`. It connects to **https://safe-she-one.vercel.app** automatically, with no server
+Install `outputs/SafeShe-5.2.apk`. It connects to **https://safe-she-one.vercel.app** automatically, with no server
 address to type. `./safeshe-android/build.sh` builds with that address by default. Set `SAFESHE_SERVER_URL=https://…`
 to build for another server.
 
