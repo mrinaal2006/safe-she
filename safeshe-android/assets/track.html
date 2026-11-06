@@ -30,7 +30,7 @@
 (function () {
   var token = location.pathname.split("/").pop();
   var map = L.map("map", { zoomControl: false }).setView([20.59, 78.96], 5);
-  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap contributors" }).addTo(map);
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", { subdomains: "abcd", maxZoom: 20, attribution: "© OpenStreetMap contributors © CARTO" }).addTo(map);
   function ic(html) { return L.divIcon({ className: "", html: html, iconSize: [28, 28], iconAnchor: [14, 14] }); }
   var car = null, fitted = false, VEH = { bike: "🏍️", auto: "🛺", cab: "🚗", pink: "🚘" };
   var STATUS = { requested: "Looking for a rider", accepted: "Rider is on the way to pickup", arrived: "Rider has arrived at pickup", started: "Trip in progress", completed: "Trip completed safely ✅", cancelled: "Trip was cancelled", no_driver: "No rider was found" };

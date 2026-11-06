@@ -312,7 +312,13 @@
   function initMap() {
     if (map) return;
     map = L.map("map", { zoomControl: false }).setView([20.59, 78.96], 5);
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap contributors" }).addTo(map);
+    // Map tiles: CARTO Voyager by default; the server can switch provider via /api/config (TILE_URL).
+    var tiles = L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", { subdomains: "abcd", maxZoom: 20, attribution: "© OpenStreetMap contributors © CARTO" }).addTo(map);
+    api("GET", "/api/config").then(function (c) {
+      var t = c && c.tiles; if (!t || !t.url || t.url === tiles._url) return;
+      map.removeLayer(tiles);
+      tiles = L.tileLayer(t.url, { subdomains: t.subdomains || "abc", maxZoom: t.maxZoom || 19, attribution: t.attribution || "" }).addTo(map);
+    }).catch(function () {});
     map.on("click", onMapClick);
   }
   function fit(points) {
@@ -401,20 +407,34 @@
     }).catch(function () {});
   }
 
-  $("searchForm").onsubmit = function (e) {
-    e.preventDefault();
-    var q = $("dropInput").value.trim(); if (q.length < 2) return;
-    $("dropInput").blur();
-    var list = $("results"); list.innerHTML = ""; list.appendChild(el("li", { class: "muted", text: "Searching…" }));
+  // Destination search: suggestions while typing (any place, ranked near the pickup), full search on Enter.
+  var searchSeq = 0, suggestTimer = null;
+  function runSearch(q, suggest) {
+    var list = $("results"), seq = ++searchSeq;
+    if (!suggest || !list.children.length) { list.innerHTML = ""; list.appendChild(el("li", { class: "muted", text: "Searching…" })); }
     var near = pickup ? "&lat=" + pickup[0] + "&lng=" + pickup[1] : "";
-    api("GET", "/api/geo/search?q=" + encodeURIComponent(q) + near).then(function (r) {
+    api("GET", "/api/geo/search?q=" + encodeURIComponent(q) + near + (suggest ? "&suggest=1" : "")).then(function (r) {
+      if (seq !== searchSeq) return; // a newer search is running
       list.innerHTML = "";
-      if (!r.results.length) { list.appendChild(el("li", { class: "muted", text: "No places found. Try another name, add the city, or choose on the map." })); return; }
+      if (!r.results.length) { list.appendChild(el("li", { class: "muted", text: suggest ? "Keep typing, or press 🔍 to search everywhere." : "No places found. Try another spelling, add the city, or choose on the map." })); return; }
       r.results.forEach(function (x) {
-        list.appendChild(el("li", { onclick: function () { list.innerHTML = ""; setDrop([x.lat, x.lng], x.name || shortName(x.address)); } },
+        list.appendChild(el("li", { onclick: function () { list.innerHTML = ""; $("dropInput").value = x.name; setDrop([x.lat, x.lng], x.name || shortName(x.address)); } },
           el("b", { text: x.name }), el("span", { class: "muted", text: (x.distanceKm != null ? x.distanceKm + " km · " : "") + x.address })));
       });
-    }).catch(function (err) { list.innerHTML = ""; list.appendChild(el("li", { class: "muted", text: err.message })); });
+      syncSheet();
+    }).catch(function (err) { if (seq !== searchSeq) return; list.innerHTML = ""; list.appendChild(el("li", { class: "muted", text: err.message })); });
+  }
+  $("dropInput").addEventListener("input", function () {
+    clearTimeout(suggestTimer);
+    var q = this.value.trim();
+    if (q.length < 3) { searchSeq++; $("results").innerHTML = ""; return; }
+    suggestTimer = setTimeout(function () { runSearch(q, true); }, 350);
+  });
+  $("searchForm").onsubmit = function (e) {
+    e.preventDefault(); clearTimeout(suggestTimer);
+    var q = $("dropInput").value.trim(); if (q.length < 2) return;
+    $("dropInput").blur();
+    runSearch(q, false);
   };
 
   function renderSaved() {

@@ -42,30 +42,41 @@ function createGeo(cfg, log) {
 
   function label(parts) { return parts.filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(', '); }
 
-  async function search(q, near) {
+  function photonPlace(f, q) {
+    const pr = f.properties || {};
+    const name = pr.name || [pr.housenumber, pr.street].filter(Boolean).join(' ') || pr.city || q;
+    const area = label([pr.street && pr.name ? pr.street : null, pr.locality, pr.district, pr.city || pr.county, pr.state, pr.country].filter(x => x && x !== name));
+    return { name, address: area ? name + ', ' + area : name, lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0], type: pr.osm_value || pr.type || '' };
+  }
+  /**
+   * Find any place worldwide. `suggest` = quick results while typing (Photon, which allows autocomplete);
+   * otherwise a full search (Photon, then Nominatim). Results are ranked near the user when `near` is given.
+   */
+  async function search(q, near, suggest) {
     q = String(q || '').trim().slice(0, 200);
     if (q.length < 2) return [];
-    const key = `s|${q.toLowerCase()}|${near ? near.lat.toFixed(1) + ',' + near.lng.toFixed(1) : ''}`;
+    const key = `s|${suggest ? 1 : 0}|${q.toLowerCase()}|${near ? near.lat.toFixed(1) + ',' + near.lng.toFixed(1) : ''}`;
     return cached(key, 24 * 3600_000, async () => {
-      let out = [];
+      let out = [], failures = 0;
       try {
-        // Worldwide search; a viewbox only *prefers* nearby results (bounded=0), it does not restrict them.
-        let p = `/search?format=jsonv2&addressdetails=1&limit=10&q=${encodeURIComponent(q)}`;
-        if (near) { const d = 0.5; p += `&viewbox=${near.lng - d},${near.lat + d},${near.lng + d},${near.lat - d}&bounded=0`; }
-        const rs = await nominatim(p);
-        out = rs.map(r => ({ name: r.name || r.display_name.split(',')[0], address: r.display_name, lat: +r.lat, lng: +r.lon }));
-      } catch (e) { log(`[geo] nominatim search failed: ${e.message}`); }
-      if (!out.length) {
+        let p = `${cfg.photonUrl}/api/?limit=${suggest ? 7 : 12}&lang=en&q=${encodeURIComponent(q)}`;
+        if (near) p += `&lat=${near.lat}&lon=${near.lng}&location_bias_scale=0.4`;
+        const fc = await getJson(p, suggest ? 5000 : 8000);
+        out = (fc.features || []).map(f => photonPlace(f, q));
+      } catch (e) { failures++; log(`[geo] photon search failed: ${e.message}`); }
+      if (!out.length && !suggest) {
         try {
-          let p = `${cfg.photonUrl}/api/?limit=10&q=${encodeURIComponent(q)}`;
-          if (near) p += `&lat=${near.lat}&lon=${near.lng}`;
-          const fc = await getJson(p);
-          out = (fc.features || []).map(f => {
-            const pr = f.properties || {};
-            return { name: pr.name || pr.street || q, address: label([pr.name, pr.street, pr.district, pr.city, pr.state, pr.country]), lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0] };
-          });
-        } catch (e) { log(`[geo] photon search failed: ${e.message}`); throw Object.assign(new Error('Place search is unavailable right now. Choose the destination on the map.'), { status: 503 }); }
+          // Worldwide; the viewbox only *prefers* nearby results (bounded=0).
+          let p = `/search?format=jsonv2&addressdetails=1&limit=10&q=${encodeURIComponent(q)}`;
+          if (near) { const d = 0.5; p += `&viewbox=${near.lng - d},${near.lat + d},${near.lng + d},${near.lat - d}&bounded=0`; }
+          const rs = await nominatim(p);
+          out = rs.map(r => ({ name: r.name || r.display_name.split(',')[0], address: r.display_name, lat: +r.lat, lng: +r.lon, type: r.type || '' }));
+        } catch (e) { failures++; log(`[geo] nominatim search failed: ${e.message}`); }
       }
+      if (!out.length && failures >= (suggest ? 1 : 2)) throw Object.assign(new Error('Place search is unavailable right now. Choose the destination on the map.'), { status: 503 });
+      // De-duplicate near-identical results.
+      const seen = new Set();
+      out = out.filter(o => { const k = o.name.toLowerCase() + '|' + o.lat.toFixed(3) + ',' + o.lng.toFixed(3); if (seen.has(k)) return false; seen.add(k); return true; });
       if (near) out.forEach(o => { o.distanceKm = +haversineKm(near, o).toFixed(1); });
       return out;
     });

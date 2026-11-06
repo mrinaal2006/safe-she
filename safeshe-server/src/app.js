@@ -302,7 +302,8 @@ function createApp(cfg) {
   app.disable('x-powered-by');
   app.use((req, res, next) => {
     res.set('X-Content-Type-Options', 'nosniff');
-    res.set('Referrer-Policy', 'no-referrer');
+    // Send the site origin (not the full URL) to other sites: map tile servers require a valid Referer.
+    res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
     if (req.path.startsWith('/api/')) {
       // Bearer-token API (no cookies), so any origin is safe, including the Android app's file:// page.
       res.set('Access-Control-Allow-Origin', '*');
@@ -317,6 +318,12 @@ function createApp(cfg) {
   app.use('/api', wrap(async (req, res, next) => { await init(); next(); }));
   const ip = req => req.ip || 'unknown';
 
+  // Map tiles for the app. Default: CARTO Voyager (no key). For high traffic or commercial scale, set TILE_URL to a
+  // provider you have an account with (e.g. MapTiler: https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=YOUR_KEY).
+  app.get('/api/config', (req, res) => res.json({ tiles: {
+    url: cfg.env.TILE_URL || 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+    attribution: cfg.env.TILE_ATTRIBUTION || '© OpenStreetMap contributors © CARTO',
+    subdomains: cfg.env.TILE_SUBDOMAINS || 'abcd', maxZoom: +cfg.env.TILE_MAX_ZOOM || 20 } }));
   app.get('/api/health', wrap(async (req, res) => { await db.one('SELECT 1 AS ok'); res.json({ ok: true, otpTestMode: otp.testMode, node: process.version, time: now() }); }));
 
   // ---------------- auth
@@ -411,11 +418,11 @@ function createApp(cfg) {
   }));
 
   // ---------------- geo
-  app.get('/api/geo/search', auth(), wrap(async (req, res) => {
+  app.get('/api/geo/search', auth('any'), wrap(async (req, res) => {
     const near = req.query.lat ? point({ lat: req.query.lat, lng: req.query.lng }) : null;
-    res.json({ results: await geo.search(req.query.q, near) });
+    res.json({ results: await geo.search(req.query.q, near, req.query.suggest === '1') });
   }));
-  app.get('/api/geo/reverse', auth(), wrap(async (req, res) => {
+  app.get('/api/geo/reverse', auth('any'), wrap(async (req, res) => {
     const p = point(req.query); if (!p) throw httpError(400, 'Invalid location.');
     res.json(await geo.reverse(p.lat, p.lng));
   }));
