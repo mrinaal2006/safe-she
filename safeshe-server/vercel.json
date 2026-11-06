@@ -3,7 +3,7 @@
   "framework": null,
   "buildCommand": "node scripts/copy-assets.js",
   "outputDirectory": "public",
-  "installCommand": "npm install",
+  "installCommand": "npm install --no-audit --no-fund --loglevel=error",
   "functions": {
     "api/index.js": {
       "maxDuration": 30
