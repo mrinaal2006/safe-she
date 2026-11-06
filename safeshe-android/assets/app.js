@@ -63,7 +63,8 @@
   var isWeb = /^https?:$/.test(location.protocol);
   function apiBase() {
     if (isWeb && !A) return "";                              // served by the SafeShe server itself
-    return (pref("server") || window.SAFESHE_API || "").replace(/\/+$/, "");
+    // The server address built into the app always wins; a typed address is only used by builds without one.
+    return (window.SAFESHE_API || pref("server") || "").replace(/\/+$/, "");
   }
   function absUrl(u) { return /^https?:/.test(u || "") ? u : (apiBase() || location.origin) + (u || ""); }
   var session = jpref("session");
@@ -1455,7 +1456,9 @@
     back: handleBack,
     onAppResumed: function (awayMs) {
       if (session && session.kind === "user") refreshActive();
-      var onRide = (role === "passenger" && curRide && ["accepted", "arrived", "started"].indexOf(curRide.status) >= 0 && tripMonitorOn) || (role === "driver" && driverRide);
+      // The "Everything okay? / I'm safe" check is for passengers only, never for riders or the admin.
+      if (!session || session.kind !== "user" || role !== "passenger") return;
+      var onRide = curRide && ["accepted", "arrived", "started"].indexOf(curRide.status) >= 0 && tripMonitorOn;
       if (!(mon.checked || onRide) || awayMs < MIN_AWAY_MS) return;
       if (!$("check").classList.contains("show") && !sosOpen()) openCheck(awayMs);
     },

@@ -102,8 +102,12 @@ verification needs a payment gateway (e.g. Razorpay, Cashfree). Some UPI apps li
 a business/merchant UPI ID works best.
 
 ## Android app
-Install `outputs/SafeShe-4.0.apk` and enter `https://<project>.vercel.app` on first launch, or build it with the
-address built in: `SAFESHE_SERVER_URL=https://<project>.vercel.app ./safeshe-android/build.sh`.
+Install `outputs/SafeShe-4.1.apk`. It connects to **https://safe-she-one.vercel.app** automatically, with no server
+address to type. `./safeshe-android/build.sh` builds with that address by default. Set `SAFESHE_SERVER_URL=https://…`
+to build for another server.
+
+The "Everything okay? / I'm safe" safety check after leaving the app is shown to **passengers only**, never to riders
+or the admin.
 
 ## Develop / test
 ```bash

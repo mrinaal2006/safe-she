@@ -19,6 +19,9 @@ rm -rf "$B"; mkdir -p "$B/gen" "$B/classes" "$OUT"
 echo "== aapt: resources + manifest"
 # Server address baked into the app (users can still enter one on first launch if empty).
 mkdir -p "$B/assets"; cp -R assets/. "$B/assets/"
+# Default: the live SafeShe server. Override with SAFESHE_SERVER_URL=https://… (or SAFESHE_SERVER_URL= for none).
+SAFESHE_SERVER_URL="${SAFESHE_SERVER_URL-https://safe-she-one.vercel.app}"
+export SAFESHE_SERVER_URL
 printf 'window.SAFESHE_API = %s;\n' "$(python3 -c 'import json,os,sys; print(json.dumps(os.environ.get("SAFESHE_SERVER_URL","").rstrip("/")))')" > "$B/assets/config.js"
 echo "   server URL: ${SAFESHE_SERVER_URL:-(none, asked on first launch)}"
 aapt package -f -m -M AndroidManifest.xml -S res -A "$B/assets" -I "$AJ" -J "$B/gen" -F "$B/unsigned.apk"
