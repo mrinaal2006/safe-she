@@ -48,7 +48,7 @@ import java.util.Locale;
  */
 public class MainActivity extends Activity {
 
-    static final class BuildInfo { static final String VERSION = "3.7"; }
+    static final class BuildInfo { static final String VERSION = "3.8"; }
 
     private static final int REQ_AUDIO = 1;
     private static final int REQ_LOCATION = 2;

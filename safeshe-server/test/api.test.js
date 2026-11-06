@@ -296,6 +296,45 @@ async function step(name, fn) {
     assert.equal((await api('GET', '/api/me', null, D2.token)).status, 401, 'blocked user session revoked');
     assert.equal((await api('POST', '/api/auth/otp/send', { phone: '9876500003', role: 'driver' })).status, 403);
   });
+  await step('regions: public list; pickup/drop must be inside an active region', async () => {
+    const list = (await api('GET', '/api/regions')).regions;
+    const blr = list.find(r => r.name === 'Bengaluru'); assert.ok(blr && blr.active && list.length >= 15);
+    const nowhere = { lat: 15.2, lng: 75.1 }; // rural Karnataka, outside every seeded city
+    const q1 = await api('POST', '/api/rides/quote', { pickup: nowhere, drop: { lat: 15.25, lng: 75.15 } }, P.token);
+    assert.equal(q1.status, 403); assert.equal(q1.code, 'not_serviceable');
+    const q2 = await api('POST', '/api/rides/quote', { pickup: BLR, drop: { lat: 13.35, lng: 77.1 } }, P.token); // ~55 km away (Tumakuru)
+    assert.equal(q2.status, 403); assert.equal(q2.code, 'drop_outside');
+    const q3 = await api('POST', '/api/rides/quote', { pickup: BLR, drop: KORA }, P.token);
+    assert.equal(q3.status, 200); assert.equal(q3.region.name, 'Bengaluru');
+  });
+  await step('regions: admin makes a city not reachable / reachable, adds and removes regions', async () => {
+    const regs = (await api('GET', '/api/admin/regions', null, A.token)).regions;
+    const blr = regs.find(r => r.name === 'Bengaluru'); assert.ok(blr.rides30d >= 1, 'ride count per region');
+    assert.equal((await api('PUT', `/api/admin/regions/${blr.id}`, { active: false }, A.token)).region.active, false);
+    const q = await api('POST', '/api/rides/quote', { pickup: BLR, drop: KORA }, P.token);
+    assert.equal(q.status, 403); assert.match(q.error, /coming soon to Bengaluru/);
+    assert.equal((await api('POST', '/api/rides', { pickup: BLR, drop: KORA, vehicle: 'cab' }, P.token)).status, 403, 'booking blocked too');
+    assert.equal((await api('PUT', `/api/admin/regions/${blr.id}`, { active: true, radiusKm: 40 }, A.token)).region.radiusKm, 40);
+    assert.equal((await api('POST', '/api/rides/quote', { pickup: BLR, drop: KORA }, P.token)).status, 200);
+    const add = await api('POST', '/api/admin/regions', { name: 'Mysuru', state: 'Karnataka', lat: 12.2958, lng: 76.6394, radiusKm: 15, active: false }, A.token);
+    assert.equal(add.status, 200, add.error); assert.equal(add.region.active, false);
+    assert.equal((await api('POST', '/api/admin/regions', { name: 'mysuru', lat: 12.3, lng: 76.6, radiusKm: 10 }, A.token)).status, 409, 'duplicate name');
+    assert.equal((await api('POST', '/api/admin/regions', { name: 'London', lat: 51.5, lng: -0.12, radiusKm: 10 }, A.token)).status, 400, 'India only');
+    const q4 = await api('POST', '/api/rides/quote', { pickup: { lat: 12.30, lng: 76.64 }, drop: { lat: 12.31, lng: 76.66 } }, P.token);
+    assert.match(q4.error, /coming soon to Mysuru/);
+    assert.equal((await api('DELETE', `/api/admin/regions/${add.region.id}`, null, A.token)).status, 200);
+    assert.equal((await api('PUT', `/api/admin/regions/${blr.id}`, { active: false }, P.token)).status, 403, 'only admin');
+  });
+  await step('stay logged in: sessions slide forward on use (no re-login until logout)', async () => {
+    const h = require('node:crypto').createHash('sha256').update(P.token).digest('hex');
+    await S.db.exec('UPDATE sessions SET expires_at = $1 WHERE token_hash = $2', [Date.now() + 60_000, h]); // about to expire
+    assert.equal((await api('GET', '/api/me', null, P.token)).status, 200);
+    const s = await S.db.one('SELECT expires_at FROM sessions WHERE token_hash = $1', [h]);
+    assert.ok(s.expires_at > Date.now() + 300 * 24 * 3600_000, 'extended to ~1 year');
+    const t2 = await login('9876500077', 'passenger');
+    assert.equal((await api('POST', '/api/logout', {}, t2.token)).status, 200);
+    assert.equal((await api('GET', '/api/me', null, t2.token)).status, 401, 'logout ends the session');
+  });
   await step('admin sees test-mode OTP codes', async () => { const o = await api('GET', '/api/admin/otps', null, A.token); assert.equal(o.testMode, true); assert.ok(o.codes.length >= 4); });
   await step('admin password change', async () => {
     assert.equal((await api('POST', '/api/admin/password', { current: 'test-admin-pass', next: 'new-pass-123' }, A.token)).status, 200);

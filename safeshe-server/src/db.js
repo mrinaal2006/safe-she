@@ -151,6 +151,41 @@ const SCHEMA = `
       INSERT INTO kv (key, value) VALUES ('ratecard_v2', '1') ON CONFLICT (key) DO NOTHING;
     END IF;
   END $$;
+  -- Service regions: the admin decides where in India SafeShe is reachable (active) or not yet (inactive).
+  -- A ride's pickup and drop must both be inside the same active region (a circle around the city centre).
+  CREATE TABLE IF NOT EXISTS regions (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT '',
+    lat DOUBLE PRECISION NOT NULL, lng DOUBLE PRECISION NOT NULL,
+    radius_km DOUBLE PRECISION NOT NULL DEFAULT 25,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    sort INTEGER NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS regions_name ON regions (LOWER(name));
+  DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM kv WHERE key = 'regions_seeded') THEN
+      INSERT INTO regions (name, state, lat, lng, radius_km, active, sort, created_at) VALUES
+        ('Bengaluru', 'Karnataka', 12.9716, 77.5946, 35, TRUE, 1, 0),
+        ('Delhi NCR', 'Delhi', 28.6139, 77.2090, 45, TRUE, 2, 0),
+        ('Mumbai', 'Maharashtra', 19.0760, 72.8777, 40, TRUE, 3, 0),
+        ('Hyderabad', 'Telangana', 17.3850, 78.4867, 35, TRUE, 4, 0),
+        ('Chennai', 'Tamil Nadu', 13.0827, 80.2707, 35, TRUE, 5, 0),
+        ('Kolkata', 'West Bengal', 22.5726, 88.3639, 30, TRUE, 6, 0),
+        ('Pune', 'Maharashtra', 18.5204, 73.8567, 30, TRUE, 7, 0),
+        ('Ahmedabad', 'Gujarat', 23.0225, 72.5714, 30, TRUE, 8, 0),
+        ('Jaipur', 'Rajasthan', 26.9124, 75.7873, 25, TRUE, 9, 0),
+        ('Lucknow', 'Uttar Pradesh', 26.8467, 80.9462, 25, TRUE, 10, 0),
+        ('Kochi', 'Kerala', 9.9312, 76.2673, 25, TRUE, 11, 0),
+        ('Chandigarh', 'Chandigarh', 30.7333, 76.7794, 20, TRUE, 12, 0),
+        ('Bhubaneswar', 'Odisha', 20.2961, 85.8245, 20, TRUE, 13, 0),
+        ('Indore', 'Madhya Pradesh', 22.7196, 75.8577, 20, TRUE, 14, 0),
+        ('Patna', 'Bihar', 25.5941, 85.1376, 20, TRUE, 15, 0)
+      ON CONFLICT DO NOTHING;
+      INSERT INTO kv (key, value) VALUES ('regions_seeded', '1') ON CONFLICT (key) DO NOTHING;
+    END IF;
+  END $$;
 `;
 
 function connectionString(env) {

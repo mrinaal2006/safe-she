@@ -243,3 +243,9 @@ table.fares input { padding: 6px 8px; min-width: 60px; }
 .planbox .row button { flex: 1; min-height: 40px; font-size: 14px; }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin: 6px 0 10px; }
 .grid2 label { display: flex; flex-direction: column; gap: 4px; }
+/* regions */
+.regionchip { font-weight: 700; color: var(--accent2); background: var(--accent-soft); border-color: #bfe3cc; white-space: nowrap; max-width: 55%; overflow: hidden; text-overflow: ellipsis; }
+#regionList li { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+#regionList li.off { opacity: .65; }
+#regionList li.cur { background: var(--accent-soft); border-radius: 10px; padding-left: 8px; }
+.regionrow { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }

@@ -52,11 +52,42 @@ function createGeo(cfg, log) {
    * Find any place worldwide. `suggest` = quick results while typing (Photon, which allows autocomplete);
    * otherwise a full search (Photon, then Nominatim). Results are ranked near the user when `near` is given.
    */
-  async function search(q, near, suggest) {
+  /** Bounding box (minLon,minLat,maxLon,maxLat) of a circle. */
+  function bbox(c, km) {
+    const dLat = km / 111, dLng = km / (111 * Math.cos(c.lat * Math.PI / 180));
+    return [c.lng - dLng, c.lat - dLat, c.lng + dLng, c.lat + dLat].map(v => v.toFixed(5));
+  }
+
+  /** Search only inside a service region (circle): all matching places in that city, nearest first. */
+  async function searchInArea(q, near, suggest, area) {
+    const box = bbox(area, area.radiusKm);
+    let out = [], failures = 0;
+    try {
+      const fc = await getJson(`${cfg.photonUrl}/api/?limit=${suggest ? 15 : 25}&lang=en&q=${encodeURIComponent(q)}&bbox=${box.join(',')}` +
+        `&lat=${near.lat}&lon=${near.lng}&zoom=12&location_bias_scale=0.3`, suggest ? 5000 : 8000);
+      out = (fc.features || []).map(f => photonPlace(f, q));
+    } catch (e) { failures++; log(`[geo] photon area search failed: ${e.message}`); }
+    if (!out.length && !suggest) {
+      try {
+        const rs = await nominatim(`/search?format=jsonv2&limit=15&q=${encodeURIComponent(q)}&viewbox=${box[0]},${box[3]},${box[2]},${box[1]}&bounded=1`);
+        out = rs.map(r => ({ name: r.name || r.display_name.split(',')[0], address: r.display_name, lat: +r.lat, lng: +r.lon, type: r.type || '' }));
+      } catch (e) { failures++; log(`[geo] nominatim area search failed: ${e.message}`); }
+    }
+    if (!out.length && failures >= (suggest ? 1 : 2)) throw Object.assign(new Error('Place search is unavailable right now. Choose the destination on the map.'), { status: 503 });
+    const seen = new Set(), words = q.toLowerCase().split(/[\s,]+/).filter(w => w.length > 1);
+    out = out.filter(o => haversineKm(area, o) <= area.radiusKm * 1.02)
+      .filter(o => { const k = o.name.toLowerCase() + '|' + o.lat.toFixed(3) + ',' + o.lng.toFixed(3); if (seen.has(k)) return false; seen.add(k); return true; });
+    out.forEach(o => { o.distanceKm = +haversineKm(near, o).toFixed(1); });
+    const score = o => words.every(w => o.name.toLowerCase().includes(w)) ? 2 : words.every(w => o.address.toLowerCase().includes(w)) ? 1 : 0;
+    return out.map(o => ({ o, s: score(o) })).sort((a, b) => b.s - a.s || a.o.distanceKm - b.o.distanceKm).map(x => x.o).slice(0, suggest ? 8 : 20);
+  }
+
+  async function search(q, near, suggest, area) {
     q = String(q || '').trim().slice(0, 200);
     if (q.length < 2) return [];
-    const key = `s|${suggest ? 1 : 0}|${q.toLowerCase()}|${near ? near.lat.toFixed(1) + ',' + near.lng.toFixed(1) : ''}`;
+    const key = `s|${suggest ? 1 : 0}|${q.toLowerCase()}|${near ? near.lat.toFixed(1) + ',' + near.lng.toFixed(1) : ''}|${area ? area.lat.toFixed(2) + ',' + area.lng.toFixed(2) + ',' + area.radiusKm : ''}`;
     return cached(key, 24 * 3600_000, async () => {
+      if (area) return searchInArea(q, near || area, suggest, area);
       let out = [], failures = 0;
       try {
         // Two lookups in parallel: places near the user, and the best-known matches anywhere (so "India Gate"

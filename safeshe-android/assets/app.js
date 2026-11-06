@@ -130,7 +130,7 @@
   }
 
   // ============================================================ screens
-  var SCREENS = ["scr-server", "scr-welcome", "scr-login", "scr-profile", "scr-driver-profile", "scr-driver-pending", "scr-main", "scr-admin"];
+  var SCREENS = ["scr-offline", "scr-server", "scr-welcome", "scr-login", "scr-profile", "scr-driver-profile", "scr-driver-pending", "scr-main", "scr-admin"];
   function showScreen(id) { SCREENS.forEach(function (s) { $(s).hidden = s !== id; }); closePages(); openDrawer(false); if (id === "scr-main" && map) setTimeout(function () { map.invalidateSize(); }, 50); }
   function showView(id) {
     ["pv-home", "pv-choose", "pv-ride", "pv-done", "dv-home", "dv-ride"].forEach(function (v) { $(v).hidden = v !== id; });
@@ -143,7 +143,7 @@
     if (!session) { showScreen("scr-welcome"); return; }
     if (session.kind === "admin") {
       api("GET", "/api/admin/stats").then(function () { connectSocket(); showScreen("scr-admin"); adminTab(adminCur || "dash"); })
-        .catch(function (e) { if (e.status !== 401) { toast(e.message); showScreen("scr-welcome"); } });
+        .catch(function (e) { if (e.status !== 401) offlineRetry(e); });
       return;
     }
     api("GET", "/api/me").then(function (r) {
@@ -160,9 +160,16 @@
       connectSocket();
     }).catch(function (e) {
       if (e.status === 401 || e.status === 403) return;
-      showScreen("scr-welcome"); toast(e.message, 5000);
+      offlineRetry(e);
     });
   }
+  // No internet / server unreachable: stay logged in and keep retrying (the login is never dropped for this).
+  var retryTimer = null;
+  function offlineRetry() {
+    showScreen("scr-offline");
+    clearTimeout(retryTimer); retryTimer = setTimeout(boot, 5000);
+  }
+  $("btnRetryNow").onclick = function () { clearTimeout(retryTimer); boot(); };
   function forceLogout(msg) {
     if (driverOnline) setOnlineLocal(false);
     stopLive();
@@ -339,7 +346,7 @@
   function startMain(r) {
     role = r; showScreen("scr-main"); initMap();
     $("roleTag").textContent = r === "driver" ? "rider" : "rides";
-    if (r === "passenger") { renderSaved(); if (!pickup) locatePickup(); }
+    if (r === "passenger") { renderSaved(); loadRegions(); if (!pickup) locatePickup(); }
     else { refreshDriverStats(); getLocation(function (d) { if (d) { meMarker = setLayer(meMarker, [d.lat, d.lng], "mk-pick"); if (!driverRide) map.setView([d.lat, d.lng], 15); } }); }
   }
   $("btnRecenter").onclick = function () {
@@ -390,9 +397,74 @@
     getLocation(function (d, err) {
       if (!d) { $("pickupText").textContent = "Location unavailable. Tap to set pickup on the map"; toast(err || "Couldn't get your location."); return; }
       var p = [d.lat, d.lng]; setPickup(p, "Current location"); startWatch();
+      autoRegion(p);
       api("GET", "/api/geo/reverse?lat=" + p[0] + "&lng=" + p[1]).then(function (r) { if (r.name && pickup === p) { pickupName = r.name; $("pickupText").textContent = r.name; } }).catch(function () {});
     });
   }
+
+  // ---------------- service regions: the passenger's city; search and booking work inside it
+  var regions = [], region = null, regionManual = false;
+  function regionFor(p, activeOnly) {
+    var best = null, bestKm = Infinity;
+    regions.forEach(function (r) {
+      if (activeOnly && !r.active) return;
+      var km = hav([r.lat, r.lng], p);
+      if (km <= r.radiusKm && km < bestKm) { best = r; bestKm = km; }
+    });
+    return best;
+  }
+  function loadRegions() {
+    return api("GET", "/api/regions").then(function (r) {
+      regions = r.regions || [];
+      var saved = +pref("region") || 0;
+      if (!region && saved) { region = regions.find(function (x) { return x.id === saved; }) || null; regionManual = !!region; }
+      if (pickup) autoRegion(pickup); else renderRegion();
+    }).catch(function () {});
+  }
+  function autoRegion(p) {
+    if (!regions.length) return;
+    var here = regionFor(p, true) || regionFor(p, false);
+    if (here && (!regionManual || !region)) { region = here; pref("region", String(here.id)); }
+    renderRegion(p);
+  }
+  function renderRegion(p) {
+    p = p || pickup;
+    $("regionChip").textContent = "📍 " + (region ? region.name : "Choose region") + " ▾";
+    var w = $("regionWarn"), msg = "";
+    if (region && !region.active) msg = "SafeShe is coming soon to " + region.name + ". Rides aren't available there yet.";
+    else if (region && p && hav([region.lat, region.lng], p) > region.radiusKm) msg = "Your pickup is outside " + region.name + ". Tap the pickup to set it inside the city.";
+    else if (!region && p && regions.length && !regionFor(p, false)) msg = "SafeShe isn't available at your location yet. Choose a city to see where we operate.";
+    w.textContent = msg; w.hidden = !msg; syncSheet();
+  }
+  function openRegionPicker() {
+    $("regionModal").classList.add("show"); $("regionFilter").value = ""; renderRegionList("");
+    // Refresh: the admin may have made a city reachable / not reachable since the app opened.
+    api("GET", "/api/regions").then(function (r) {
+      regions = r.regions || [];
+      if (region) region = regions.find(function (x) { return x.id === region.id; }) || null;
+      renderRegionList($("regionFilter").value); renderRegion();
+    }).catch(function () {});
+  }
+  function renderRegionList(filter) {
+    var ul = $("regionList"); ul.innerHTML = ""; filter = (filter || "").toLowerCase();
+    var mine = pickup ? regionFor(pickup, false) : null;
+    regions.filter(function (r) { return !filter || (r.name + " " + r.state).toLowerCase().indexOf(filter) >= 0; })
+      .sort(function (a, b) { return (b.active - a.active) || (a === mine ? -1 : b === mine ? 1 : 0); })
+      .forEach(function (r) {
+        ul.appendChild(el("li", { class: (r.active ? "" : "off") + (region && region.id === r.id ? " cur" : ""), onclick: function () {
+          region = r; regionManual = true; pref("region", String(r.id)); $("regionModal").classList.remove("show");
+          $("results").innerHTML = ""; renderRegion();
+          if (!pickup || hav([r.lat, r.lng], pickup) > r.radiusKm) map.setView([r.lat, r.lng], 12);
+          toast(r.active ? "Showing places in " + r.name : r.name + ": coming soon");
+        } },
+          el("span", null, el("b", { text: r.name }), el("span", { class: "muted", text: " · " + r.state + (r === mine ? " · you are here" : "") })),
+          el("span", { class: "pill " + (r.active ? "" : "grey"), text: r.active ? "✅ Available" : "Coming soon" })));
+      });
+    if (!ul.children.length) ul.appendChild(el("li", { class: "muted", text: "No matching city." }));
+  }
+  $("regionChip").onclick = openRegionPicker;
+  $("btnRegionClose").onclick = function () { $("regionModal").classList.remove("show"); };
+  $("regionFilter").addEventListener("input", function () { renderRegionList(this.value); });
   $("pickupRow").onclick = function () { if (curRide) return; pickMode = "pickup"; toast("Tap the map to set your pickup point"); sheet.style.transform = "translateY(70%)"; syncSheet(); };
   $("btnPickOnMap").onclick = function () { pickMode = "drop"; toast("Tap the map to set your destination"); sheet.style.transform = "translateY(70%)"; syncSheet(); };
   function onMapClick(e) {
@@ -413,7 +485,8 @@
     var list = $("results"), seq = ++searchSeq;
     if (!suggest || !list.children.length) { list.innerHTML = ""; list.appendChild(el("li", { class: "muted", text: "Searching…" })); }
     var near = pickup ? "&lat=" + pickup[0] + "&lng=" + pickup[1] : "";
-    api("GET", "/api/geo/search?q=" + encodeURIComponent(q) + near + (suggest ? "&suggest=1" : "")).then(function (r) {
+    var reg = region ? "&region=" + region.id : ""; // search only inside the chosen region
+    api("GET", "/api/geo/search?q=" + encodeURIComponent(q) + near + reg + (suggest ? "&suggest=1" : "")).then(function (r) {
       if (seq !== searchSeq) return; // a newer search is running
       list.innerHTML = "";
       if (!r.results.length) { list.appendChild(el("li", { class: "muted", text: suggest ? "Keep typing, or press 🔍 to search everywhere." : "No places found. Try another spelling, add the city, or choose on the map." })); return; }
@@ -1114,6 +1187,48 @@
         })) : el("p", { class: "muted", text: "No users found." }));
       });
     },
+    regions: function (c) {
+      return api("GET", "/api/admin/regions").then(function (r) {
+        c.innerHTML = "";
+        var on = r.regions.filter(function (x) { return x.active; }).length;
+        c.appendChild(el("p", { class: "muted small", text: "Choose where in India SafeShe is reachable. Passengers can book only when pickup and drop are inside a reachable region (a circle around the city centre). " + on + " of " + r.regions.length + " regions are reachable." }));
+        // add a region
+        var nm = el("input", { type: "text", placeholder: "City / area name, e.g. Mysuru" }), st = el("input", { type: "text", placeholder: "State" });
+        var la = el("input", { type: "number", step: "0.0001", placeholder: "Latitude" }), lo = el("input", { type: "number", step: "0.0001", placeholder: "Longitude" });
+        var rad = el("input", { type: "number", min: "1", max: "200", value: "20" }), act0 = el("input", { type: "checkbox" }); act0.checked = true;
+        c.appendChild(el("section", { class: "card" }, el("h3", { text: "Add a region" }),
+          el("div", { class: "filters" }, nm, act("Find", "ghost", function () {
+            if (nm.value.trim().length < 2) { toast("Type the city name first"); return; }
+            return api("GET", "/api/geo/search?q=" + encodeURIComponent(nm.value.trim() + ", India")).then(function (s) {
+              var x = (s.results || [])[0]; if (!x) { toast("City not found. Enter latitude/longitude."); return; }
+              la.value = x.lat.toFixed(4); lo.value = x.lng.toFixed(4); toast("Found: " + x.address.slice(0, 60));
+            });
+          })),
+          el("div", { class: "grid2" }, el("label", { class: "small muted" }, "State", st), el("label", { class: "small muted" }, "Latitude", la), el("label", { class: "small muted" }, "Longitude", lo), el("label", { class: "small muted" }, "Radius (km)", rad)),
+          el("label", { class: "check" }, act0, " Reachable now (rides available)"),
+          act("Add region", "primary", function () {
+            return api("POST", "/api/admin/regions", { name: nm.value, state: st.value, lat: +la.value, lng: +lo.value, radiusKm: +rad.value, active: act0.checked })
+              .then(function (x) { toast(x.region.name + " added"); adminTab("regions", true); });
+          })));
+        c.appendChild(el("div", { class: "list" }, r.regions.map(function (g) {
+          var sw = el("input", { type: "checkbox" }); sw.checked = g.active;
+          var radius = el("input", { type: "number", min: "1", max: "200", value: g.radiusKm, style: "max-width:90px" });
+          sw.onchange = function () {
+            api("PUT", "/api/admin/regions/" + g.id, { active: sw.checked }).then(function (x) { toast(x.region.name + (x.region.active ? " is now reachable" : " is now not reachable")); adminTab("regions", true); })
+              .catch(function (e) { toast(e.message); sw.checked = !sw.checked; });
+          };
+          return el("div", { class: "item" },
+            el("div", { class: "regionrow" },
+              el("div", null, el("h4", { text: g.name + (g.state ? " · " + g.state : "") }),
+                el("div", { class: "small muted", text: g.lat.toFixed(3) + ", " + g.lng.toFixed(3) + " · " + g.rides30d + " rides in 30 days" })),
+              el("label", { class: "switch", title: "Reachable" }, sw, el("span", { class: "slider" }))),
+            el("div", { class: "small", text: g.active ? "✅ Reachable: passengers can book here" : "⛔ Not reachable: shown as Coming soon" }),
+            el("div", { class: "acts" }, el("span", { class: "small muted" }, "Radius km "), radius,
+              act("Save radius", "ghost", function () { return api("PUT", "/api/admin/regions/" + g.id, { radiusKm: +radius.value }).then(function () { toast("Saved"); }); }),
+              act("Delete", "ghost", function () { if (!confirm("Delete " + g.name + "?")) return; return api("DELETE", "/api/admin/regions/" + g.id).then(function () { adminTab("regions", true); }); })));
+        })));
+      });
+    },
     payments: function (c) {
       var f = adminFilter.payments || "pending";
       return Promise.all([api("GET", "/api/admin/payments" + (f === "all" ? "" : "?status=" + f)), api("GET", "/api/admin/dues"), api("GET", "/api/admin/payment-settings")]).then(function (x) {
@@ -1239,6 +1354,7 @@
   // ============================================================ Android back + native events
   function handleBack() {
     if ($("sosModal").classList.contains("show")) { $("sosModal").classList.remove("show"); return true; }
+    if ($("regionModal").classList.contains("show")) { $("regionModal").classList.remove("show"); return true; }
     if ($("drawer").classList.contains("show")) { openDrawer(false); return true; }
     if ([].some.call(document.querySelectorAll(".page"), function (p) { return !p.hidden; })) { closePages(); return true; }
     if (pickMode) { pickMode = null; sheet.style.transform = ""; return true; }

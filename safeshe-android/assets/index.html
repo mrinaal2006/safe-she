@@ -22,6 +22,16 @@
 </section>
 
 <!-- ======================= welcome / role ======================= -->
+<section class="screen center" id="scr-offline" hidden>
+  <div class="authbox">
+    <div class="logo">Safe<span>She</span></div>
+    <div class="bigicon">📶</div>
+    <h2>No connection</h2>
+    <p class="muted">You're still logged in. SafeShe will reconnect automatically when the internet is back.</p>
+    <button class="primary wide" id="btnRetryNow">Retry now</button>
+  </div>
+</section>
+
 <section class="screen center" id="scr-welcome" hidden>
   <div class="authbox">
     <div class="logo big">Safe<span>She</span></div>
@@ -131,7 +141,11 @@
     <!-- passenger: home -->
     <div class="view" id="pv-home" hidden>
       <div class="grip"></div>
-      <h2 id="greet">Where to?</h2>
+      <div class="between">
+        <h2 id="greet" style="margin:0">Where to?</h2>
+        <button class="chip regionchip" id="regionChip" aria-label="Choose your region">📍 Choose region ▾</button>
+      </div>
+      <p class="status bad small" id="regionWarn" hidden></p>
       <div class="places">
         <div class="place" id="pickupRow"><span class="pin green"></span><div><small>Pickup · tap to change</small><div id="pickupText">Finding your location…</div></div></div>
         <div class="place"><span class="pin red"></span>
@@ -264,7 +278,7 @@
   </header>
   <nav class="tabs" id="adminTabs">
     <button data-tab="dash" class="on">Dashboard</button><button data-tab="sos">SOS</button><button data-tab="riders">Riders</button>
-    <button data-tab="rides">Rides</button><button data-tab="users">Users</button><button data-tab="payments">Payments</button><button data-tab="fares">Fares</button><button data-tab="settings">Settings</button>
+    <button data-tab="rides">Rides</button><button data-tab="users">Users</button><button data-tab="payments">Payments</button><button data-tab="regions">Regions</button><button data-tab="fares">Fares</button><button data-tab="settings">Settings</button>
   </nav>
   <div class="admincontent" id="adminContent"></div>
 </section>
@@ -334,6 +348,15 @@
     <div class="progress warn"><i id="checkBar"></i></div>
     <div class="row"><button class="ok" id="btnSafe">I'm safe</button><button class="primary" id="btnAlert">Prepare alert</button></div>
     <p class="muted small" id="checkCountdown"></p>
+  </div>
+</div>
+
+<div class="modal" id="regionModal" role="dialog" aria-modal="true" aria-labelledby="regionTitle">
+  <div class="msheet">
+    <div class="between"><h3 id="regionTitle">Choose your region</h3><button class="link" id="btnRegionClose">Close</button></div>
+    <p class="muted small">Search shows places inside the region you choose. Rides are available only in cities marked ✅.</p>
+    <input type="search" id="regionFilter" placeholder="Filter cities">
+    <ul class="results" id="regionList"></ul>
   </div>
 </div>
 

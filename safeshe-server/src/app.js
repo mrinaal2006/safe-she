@@ -103,16 +103,20 @@ function createApp(cfg) {
     await db.exec('INSERT INTO events (target, type, data, created_at) VALUES ($1,$2,$3,$4)', [target, type, JSON.stringify(data || {}), now()]);
   }
 
+  // Logins stay valid until the user logs out: every use slides the expiry forward
+  // (users: 1 year of inactivity, admin: 30 days). Blocking a user or logging out ends the session.
+  const sessionTtl = kind => kind === 'admin' ? 30 * 24 * 3600_000 : 365 * 24 * 3600_000;
   async function issueSession(kind, id) {
     const t = sec.token();
-    const ttl = kind === 'admin' ? 12 * 3600_000 : 90 * 24 * 3600_000;
-    await db.exec('INSERT INTO sessions (token_hash, kind, subject_id, created_at, expires_at) VALUES ($1,$2,$3,$4,$5)', [sec.sha256(t), kind, id, now(), now() + ttl]);
+    await db.exec('INSERT INTO sessions (token_hash, kind, subject_id, created_at, expires_at) VALUES ($1,$2,$3,$4,$5)', [sec.sha256(t), kind, id, now(), now() + sessionTtl(kind)]);
     return t;
   }
   async function sessionFrom(tokenStr) {
     if (!tokenStr) return null;
     const s = await db.one('SELECT * FROM sessions WHERE token_hash = $1', [sec.sha256(tokenStr)]);
     if (!s || s.expires_at < now()) return null;
+    if (s.expires_at - now() < sessionTtl(s.kind) - 24 * 3600_000) // extend at most once a day
+      await db.exec('UPDATE sessions SET expires_at = $1 WHERE token_hash = $2', [now() + sessionTtl(s.kind), s.token_hash]);
     if (s.kind === 'admin') {
       const a = await db.one('SELECT id, username FROM admins WHERE id = $1', [s.subject_id]);
       return a ? { kind: 'admin', admin: a } : null;
@@ -152,6 +156,32 @@ function createApp(cfg) {
     const r = await db.one("SELECT value FROM kv WHERE key = 'pricing'");
     let stored = null; try { stored = r ? JSON.parse(r.value) : null; } catch (e) { stored = null; }
     return pricingEngine.normalizePricing(stored);
+  }
+  // ---------------- service regions (admin-controlled): where SafeShe is reachable
+  const regionsAll = () => db.q('SELECT * FROM regions ORDER BY sort, name');
+  const regionView = r => r && ({ id: r.id, name: r.name, state: r.state, lat: r.lat, lng: r.lng, radiusKm: r.radius_km, active: r.active });
+  /** Nearest region whose circle contains point p (optionally active regions only). */
+  function regionContaining(regs, p, activeOnly) {
+    let best = null, bestKm = Infinity;
+    for (const r of regs) {
+      if (activeOnly && !r.active) continue;
+      const km = haversineKm(r, p);
+      if (km <= r.radius_km && km < bestKm) { best = r; bestKm = km; }
+    }
+    return best;
+  }
+  /** Pickup and drop must both be inside the same active region. */
+  async function requireServiceable(a, b) {
+    const regs = await regionsAll();
+    const ra = regionContaining(regs, a, true);
+    if (!ra) {
+      const soon = regionContaining(regs, a, false);
+      throw Object.assign(new Error(soon ? `SafeShe is coming soon to ${soon.name}. Rides are not available there yet.`
+        : 'SafeShe is not available at this pickup location yet. Choose a pickup inside a SafeShe city.'), { status: 403, code: 'not_serviceable' });
+    }
+    if (haversineKm(ra, b) > ra.radius_km)
+      throw Object.assign(new Error(`This drop is outside the ${ra.name} service area. Choose a destination within ${ra.radius_km} km of the city centre.`), { status: 403, code: 'drop_outside' });
+    return ra;
   }
   /** The rider's pass covering time `at`, if any. */
   const activePass = (driverId, at) => db.one('SELECT * FROM driver_passes WHERE driver_id = $1 AND starts_at <= $2 AND ends_at > $2 ORDER BY ends_at DESC LIMIT 1', [driverId, at]);
@@ -419,9 +449,17 @@ function createApp(cfg) {
 
   // ---------------- geo
   app.get('/api/geo/search', auth('any'), wrap(async (req, res) => {
-    const near = req.query.lat ? point({ lat: req.query.lat, lng: req.query.lng }) : null;
-    res.json({ results: await geo.search(req.query.q, near, req.query.suggest === '1') });
+    let near = req.query.lat ? point({ lat: req.query.lat, lng: req.query.lng }) : null;
+    // With a region selected, search only inside that region (all nearby places in the city).
+    let area = null;
+    if (req.query.region) {
+      const r = await db.one('SELECT * FROM regions WHERE id = $1', [+req.query.region || 0]);
+      if (r) { area = { lat: r.lat, lng: r.lng, radiusKm: r.radius_km }; if (!near || haversineKm(r, near) > r.radius_km) near = { lat: r.lat, lng: r.lng }; }
+    }
+    res.json({ results: await geo.search(req.query.q, near, req.query.suggest === '1', area) });
   }));
+  // Public list of regions (for the region picker): active = rides available, inactive = coming soon.
+  app.get('/api/regions', wrap(async (req, res) => res.json({ regions: (await regionsAll()).map(regionView) })));
   app.get('/api/geo/reverse', auth('any'), wrap(async (req, res) => {
     const p = point(req.query); if (!p) throw httpError(400, 'Invalid location.');
     res.json(await geo.reverse(p.lat, p.lng));
@@ -433,6 +471,7 @@ function createApp(cfg) {
     if (!a || !b) throw httpError(400, 'Choose pickup and drop locations.');
     if (haversineKm(a, b) < 0.1) throw httpError(400, 'Pickup and drop are too close.');
     if (haversineKm(a, b) > 150) throw httpError(400, 'Rides are limited to 150 km.');
+    const region = await requireServiceable(a, b);
     const [rt, online, fs, P] = await Promise.all([geo.route(a, b), availableDrivers(), fares(), pricing()]);
     const t = now(), night = pricingEngine.isNight(t, P);
     const opts = fs.filter(f => f.active).map(f => {
@@ -443,7 +482,7 @@ function createApp(cfg) {
       return { vehicle: f.vehicle, name: f.name, fare: b.total, breakdown: b, perMin: f.per_min, etaMin: eta, ridersNearby: near.length,
         maxPickupSurcharge: pricingEngine.pickupSurcharge(cfg.radiusKm, P) };
     });
-    res.json({ km: +rt.km.toFixed(2), min: Math.round(rt.min), approx: rt.approx, points: rt.points, options: opts, night,
+    res.json({ km: +rt.km.toFixed(2), min: Math.round(rt.min), approx: rt.approx, points: rt.points, options: opts, night, region: regionView(region),
       nightMultiplier: P.night.multiplier, gridlock: { speedKmh: P.gridlock.speedKmh, minMinutes: P.gridlock.minMinutes },
       pickup: { freeKm: P.pickup.freeKm, perKm: P.pickup.perKm } });
   }));
@@ -453,6 +492,7 @@ function createApp(cfg) {
     if (await activeRideFor(u.id, 'passenger')) throw httpError(409, 'You already have an active ride.');
     const a = point(req.body.pickup), b = point(req.body.drop), vehicle = req.body.vehicle;
     if (!a || !b) throw httpError(400, 'Choose pickup and drop locations.');
+    await requireServiceable(a, b);
     const f = (await fares()).find(x => x.vehicle === vehicle && x.active);
     if (!f) throw httpError(400, 'This ride type is not available.');
     const payment = req.body.payment === 'upi' ? 'upi' : 'cash';
@@ -769,6 +809,41 @@ function createApp(cfg) {
     log('[admin] fares updated');
     res.json({ fares: await fares() });
   }));
+  // ---------------- admin: service regions (reachable / not reachable)
+  function regionInput(b) {
+    const name = str(b.name, 60), state = str(b.state, 60);
+    const lat = num(b.lat, 6, 38), lng = num(b.lng, 68, 98), radius = num(b.radiusKm, 1, 200); // India bounds
+    if (name.length < 2) throw httpError(400, 'Enter the region name.');
+    if (lat == null || lng == null) throw httpError(400, 'Set the region centre (a location in India). Use "Find" to look up the city.');
+    if (radius == null) throw httpError(400, 'Radius must be 1–200 km.');
+    return [name, state, lat, lng, radius, b.active !== false];
+  }
+  app.get('/api/admin/regions', admin, wrap(async (req, res) => {
+    const regs = await regionsAll();
+    const counts = await db.q("SELECT pickup_lat AS lat, pickup_lng AS lng FROM rides WHERE status = 'completed' AND completed_at > $1", [now() - 30 * 24 * 3600_000]);
+    res.json({ regions: regs.map(r => ({ ...regionView(r), rides30d: counts.filter(c => haversineKm(r, c) <= r.radius_km).length })) });
+  }));
+  app.post('/api/admin/regions', admin, wrap(async (req, res) => {
+    const v = regionInput(req.body);
+    const r = await db.one('INSERT INTO regions (name, state, lat, lng, radius_km, active, sort, created_at) VALUES ($1,$2,$3,$4,$5,$6,(SELECT COALESCE(MAX(sort),0)+1 FROM regions),$7) ON CONFLICT DO NOTHING RETURNING *', [...v, now()]);
+    if (!r) throw httpError(409, 'A region with this name already exists.');
+    log(`[admin] region added: ${r.name}`);
+    res.json({ region: regionView(r) });
+  }));
+  app.put('/api/admin/regions/:id', admin, wrap(async (req, res) => {
+    const cur = await db.one('SELECT * FROM regions WHERE id = $1', [+req.params.id || 0]);
+    if (!cur) throw httpError(404, 'Region not found.');
+    const v = regionInput({ name: cur.name, state: cur.state, lat: cur.lat, lng: cur.lng, radiusKm: cur.radius_km, active: cur.active, ...req.body });
+    const r = await db.one('UPDATE regions SET name=$1, state=$2, lat=$3, lng=$4, radius_km=$5, active=$6 WHERE id=$7 RETURNING *', [...v, cur.id]).catch(e => {
+      if (/unique/i.test(e.message)) throw httpError(409, 'A region with this name already exists.'); throw e; });
+    log(`[admin] region ${r.name} updated (${r.active ? 'reachable' : 'not reachable'})`);
+    res.json({ region: regionView(r) });
+  }));
+  app.delete('/api/admin/regions/:id', admin, wrap(async (req, res) => {
+    const n = await db.exec('DELETE FROM regions WHERE id = $1', [+req.params.id || 0]);
+    if (!n) throw httpError(404, 'Region not found.');
+    res.json({ ok: true });
+  }));
   app.get('/api/admin/pricing', admin, wrap(async (req, res) => res.json(await pricing())));
   app.put('/api/admin/pricing', admin, wrap(async (req, res) => {
     const v = pricingEngine.validatePricing(req.body);
@@ -861,7 +936,8 @@ function createApp(cfg) {
   app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
     const status = err.status || (err.type === 'entity.parse.failed' ? 400 : 500);
     if (status >= 500 && !err.status) log('[error]', err.stack || err.message);
-    res.status(status).json({ error: status >= 500 && !err.status ? (/DATABASE_URL/.test(err.message) ? err.message : 'Something went wrong. Please try again.') : err.message });
+    res.status(status).json({ error: status >= 500 && !err.status ? (/DATABASE_URL/.test(err.message) ? err.message : 'Something went wrong. Please try again.') : err.message,
+      code: err.status && typeof err.code === 'string' ? err.code : undefined });
   });
 
   return { app, db, cfg, init, tick, close: () => db.close() };

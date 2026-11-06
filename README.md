@@ -3,14 +3,27 @@
 A bike, auto and cab booking app with women's-safety features built in. It has three roles:
 - **Passenger:** logs in with phone + SMS OTP, books rides, tracks the rider live, and has SOS, a trip monitor and voice recording.
 - **Rider (captain):** registers a vehicle, is approved by the admin, goes online and accepts rides (pickup OTP to start).
-- **Admin:** dashboard with live SOS alerts, rider approval, users, rides, fares, and SMS status and settings.
+- **Admin:** dashboard with live SOS alerts, rider approval, users, rides, fares, service regions, and SMS status and settings.
+
+**Service regions:** the admin decides where in India SafeShe is reachable (Admin → **Regions**). 15 major cities are
+included and switched on to start: Bengaluru, Delhi NCR, Mumbai, Hyderabad, Chennai, Kolkata, Pune, Ahmedabad, Jaipur,
+Lucknow, Kochi, Chandigarh, Bhubaneswar, Indore and Patna. The admin can switch any city to **not reachable** (shown
+as "Coming soon"), change its radius, or add a new region (with **Find** to look up the city centre). Passengers' region
+is detected from GPS, or they choose it with the 📍 region button. Destination search then shows places **inside that
+region**. A ride is accepted only when pickup and drop are both inside the same reachable region.
+
+**Stay logged in:** after logging in once, the app stays logged in until **Log out**. Each use extends the login.
+With no internet, the app shows "No connection" and reconnects by itself without asking you to log in again.
+
+**Free maps:** map tiles come from CARTO (free, no key). Place search uses Photon (free, made for search-as-you-type),
+with Nominatim as a fallback. To use a paid map provider later, set `TILE_URL`.
 
 | Folder | What it is |
 |---|---|
 | `api/`, `vercel.json`, `package.json` | Vercel deployment from the repository root |
 | [`safeshe-server/`](safeshe-server/README.md) | Server code (Express + Postgres) and its tests |
 | [`safeshe-android/`](safeshe-android/README.md) | Android app (WebView app + native recording, location, SMS, dialling) |
-| `outputs/SafeShe-3.7.apk` | Latest signed APK. It asks for the server address on first launch. |
+| `outputs/SafeShe-3.8.apk` | Latest signed APK. It asks for the server address on first launch. |
 
 ## Deploy on Vercel
 1. **Import:** vercel.com → **Add New → Project** → import `safe-she`.
@@ -81,12 +94,12 @@ verification needs a payment gateway (e.g. Razorpay, Cashfree). Some UPI apps li
 a business/merchant UPI ID works best.
 
 ## Android app
-Install `outputs/SafeShe-3.7.apk` and enter `https://<project>.vercel.app` on first launch, or build it with the
+Install `outputs/SafeShe-3.8.apk` and enter `https://<project>.vercel.app` on first launch, or build it with the
 address built in: `SAFESHE_SERVER_URL=https://<project>.vercel.app ./safeshe-android/build.sh`.
 
 ## Develop / test
 ```bash
 npm install
 DATABASE_URL=postgres://… ADMIN_PASSWORD=… npm start      # http://localhost:8080
-TEST_DATABASE_URL=postgres://…/throwaway npm test          # 39 end-to-end checks (drops that DB's tables)
+TEST_DATABASE_URL=postgres://…/throwaway npm test          # 42 end-to-end checks (drops that DB's tables)
 ```
