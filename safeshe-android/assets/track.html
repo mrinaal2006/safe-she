@@ -6,6 +6,7 @@
 <meta name="robots" content="noindex">
 <title>SafeShe Live Trip</title>
 <link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/vendor/maplibre/maplibre-gl.css">
 <style>
   :root { --accent: #0f9d58; --text: #17201b; --muted: #66736b; --line: #dfe7e2; --danger: #e53935; }
   html, body { margin: 0; height: 100%; font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--text); background: #fff; }
@@ -26,11 +27,17 @@
 <div class="card"><h2 id="title">Loading trip…</h2><div id="info" class="muted"></div><div id="upd" class="muted"></div>
   <a class="call" href="tel:112">📞 Emergency: call 112</a></div>
 <script src="/vendor/leaflet/leaflet.js"></script>
+<script src="/vendor/maplibre/maplibre-gl.js"></script>
+<script src="/vendor/maplibre/leaflet-maplibre-gl.js"></script>
 <script>
 (function () {
   var token = location.pathname.split("/").pop();
   var map = L.map("map", { zoomControl: false }).setView([20.59, 78.96], 5);
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", { subdomains: "abcd", maxZoom: 20, attribution: "© OpenStreetMap contributors © CARTO" }).addTo(map);
+  // Free OpenFreeMap vector map (MapLibre); raster OpenStreetMap tiles if WebGL is unavailable.
+  var ATTR = 'OpenFreeMap © OpenMapTiles Data from OpenStreetMap';
+  var gl = false; try { var cv = document.createElement("canvas"); gl = !!(cv.getContext("webgl") || cv.getContext("experimental-webgl")); } catch (e) {}
+  if (gl && L.maplibreGL) L.maplibreGL({ style: "https://tiles.openfreemap.org/styles/liberty", attribution: ATTR }).addTo(map);
+  else L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap contributors" }).addTo(map);
   function ic(html) { return L.divIcon({ className: "", html: html, iconSize: [28, 28], iconAnchor: [14, 14] }); }
   var car = null, fitted = false, VEH = { bike: "🏍️", auto: "🛺", cab: "🚗", pink: "🚘" };
   var STATUS = { requested: "Looking for a rider", accepted: "Rider is on the way to pickup", arrived: "Rider has arrived at pickup", started: "Trip in progress", completed: "Trip completed safely ✅", cancelled: "Trip was cancelled", no_driver: "No rider was found" };

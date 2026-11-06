@@ -348,12 +348,14 @@ function createApp(cfg) {
   app.use('/api', wrap(async (req, res, next) => { await init(); next(); }));
   const ip = req => req.ip || 'unknown';
 
-  // Map tiles for the app. Default: CARTO Voyager (no key). For high traffic or commercial scale, set TILE_URL to a
-  // provider you have an account with (e.g. MapTiler: https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=YOUR_KEY).
-  app.get('/api/config', (req, res) => res.json({ tiles: {
-    url: cfg.env.TILE_URL || 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-    attribution: cfg.env.TILE_ATTRIBUTION || '© OpenStreetMap contributors © CARTO',
-    subdomains: cfg.env.TILE_SUBDOMAINS || 'abcd', maxZoom: +cfg.env.TILE_MAX_ZOOM || 20 } }));
+  // Base map for the app. Default: OpenFreeMap (free vector map: no key, no registration, commercial use allowed),
+  // with OpenStreetMap raster tiles as the no-WebGL fallback. Override with TILE_STYLE (vector style JSON URL)
+  // or TILE_URL (raster tiles, e.g. a provider you have an account with).
+  app.get('/api/config', (req, res) => res.json({ map: {
+    style: cfg.env.TILE_URL && !cfg.env.TILE_STYLE ? null : (cfg.env.TILE_STYLE || 'https://tiles.openfreemap.org/styles/liberty'),
+    url: cfg.env.TILE_URL || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    subdomains: cfg.env.TILE_SUBDOMAINS || 'abc', maxZoom: +cfg.env.TILE_MAX_ZOOM || 19,
+    attribution: cfg.env.TILE_ATTRIBUTION || '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank">OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>' } }));
   app.get('/api/health', wrap(async (req, res) => { await db.one('SELECT 1 AS ok'); res.json({ ok: true, otpTestMode: otp.testMode, node: process.version, time: now() }); }));
 
   // ---------------- auth

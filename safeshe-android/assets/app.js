@@ -319,12 +319,12 @@
   function initMap() {
     if (map) return;
     map = L.map("map", { zoomControl: false }).setView([20.59, 78.96], 5);
-    // Map tiles: CARTO Voyager by default; the server can switch provider via /api/config (TILE_URL).
-    var tiles = L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", { subdomains: "abcd", maxZoom: 20, attribution: "© OpenStreetMap contributors © CARTO" }).addTo(map);
+    // Base map: OpenFreeMap vector map (free, no key, no limits) drawn with MapLibre; raster tiles as a fallback.
+    // The server can switch provider via /api/config (TILE_STYLE for a vector style, TILE_URL for raster tiles).
+    var base = baseLayer(DEFAULT_MAP).addTo(map);
     api("GET", "/api/config").then(function (c) {
-      var t = c && c.tiles; if (!t || !t.url || t.url === tiles._url) return;
-      map.removeLayer(tiles);
-      tiles = L.tileLayer(t.url, { subdomains: t.subdomains || "abc", maxZoom: t.maxZoom || 19, attribution: t.attribution || "" }).addTo(map);
+      var t = c && c.map; if (!t || (t.style || t.url) === (DEFAULT_MAP.style || DEFAULT_MAP.url)) return;
+      map.removeLayer(base); base = baseLayer(t).addTo(map);
     }).catch(function () {});
     map.on("click", onMapClick);
   }
@@ -341,6 +341,18 @@
   function drawRoute(pts, approx) {
     if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
     if (pts && pts.length > 1) routeLine = L.polyline(pts, { color: "#0f9d58", weight: 5, opacity: .9, dashArray: approx ? "8 8" : null }).addTo(map);
+  }
+  var DEFAULT_MAP = { style: "https://tiles.openfreemap.org/styles/liberty",
+    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", maxZoom: 19,
+    attribution: '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank">OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>' };
+  function webglOk() {
+    try { var c = document.createElement("canvas"); return !!(window.WebGLRenderingContext && (c.getContext("webgl") || c.getContext("experimental-webgl"))); } catch (e) { return false; }
+  }
+  /** Vector map (MapLibre) when the device supports WebGL, otherwise raster tiles. */
+  function baseLayer(t) {
+    if (t.style && L.maplibreGL && window.maplibregl && webglOk())
+      return L.maplibreGL({ style: t.style, attribution: t.attribution || DEFAULT_MAP.attribution });
+    return L.tileLayer(t.url || DEFAULT_MAP.url, { subdomains: t.subdomains || "abc", maxZoom: t.maxZoom || 19, attribution: t.attribution || DEFAULT_MAP.attribution });
   }
   var role = null;
   function startMain(r) {

@@ -15,15 +15,17 @@ region**. A ride is accepted only when pickup and drop are both inside the same 
 **Stay logged in:** after logging in once, the app stays logged in until **Log out**. Each use extends the login.
 With no internet, the app shows "No connection" and reconnects by itself without asking you to log in again.
 
-**Free maps:** map tiles come from CARTO (free, no key). Place search uses Photon (free, made for search-as-you-type),
-with Nominatim as a fallback. To use a paid map provider later, set `TILE_URL`.
+**Free maps:** the map is **OpenFreeMap** (free vector map: no key, no registration, no usage limits, commercial use
+allowed), drawn with MapLibre. Devices without WebGL fall back to OpenStreetMap tiles. Place search uses Photon (free,
+made for search-as-you-type), with Nominatim as a fallback. To use another provider later, set `TILE_STYLE` (vector)
+or `TILE_URL` (raster) on the server.
 
 | Folder | What it is |
 |---|---|
 | `api/`, `vercel.json`, `package.json` | Vercel deployment from the repository root |
 | [`safeshe-server/`](safeshe-server/README.md) | Server code (Express + Postgres) and its tests |
 | [`safeshe-android/`](safeshe-android/README.md) | Android app (WebView app + native recording, location, SMS, dialling) |
-| `outputs/SafeShe-3.8.apk` | Latest signed APK. It asks for the server address on first launch. |
+| `outputs/SafeShe-3.9.apk` | Latest signed APK. It asks for the server address on first launch. |
 
 ## Deploy on Vercel
 1. **Import:** vercel.com → **Add New → Project** → import `safe-she`.
@@ -94,7 +96,7 @@ verification needs a payment gateway (e.g. Razorpay, Cashfree). Some UPI apps li
 a business/merchant UPI ID works best.
 
 ## Android app
-Install `outputs/SafeShe-3.8.apk` and enter `https://<project>.vercel.app` on first launch, or build it with the
+Install `outputs/SafeShe-3.9.apk` and enter `https://<project>.vercel.app` on first launch, or build it with the
 address built in: `SAFESHE_SERVER_URL=https://<project>.vercel.app ./safeshe-android/build.sh`.
 
 ## Develop / test
