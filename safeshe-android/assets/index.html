@@ -280,9 +280,8 @@
       </div>
       <div class="duesbox" id="duesBox" hidden>
         <div class="between"><div><small class="muted">Due to SafeShe (fees + passes)</small><b id="duesAmt">₹0</b></div>
-          <button class="primary small" id="btnPayUpi">Pay via UPI</button></div>
+</div>
         <p class="muted small" id="duesInfo"></p>
-        <div id="duesApps" hidden></div>
         <div id="duesAlt"></div>
         <div id="utrForm" hidden>
           <label class="small muted" for="utrInput">After paying, enter the UPI reference (UTR / UPI Ref No.) from your UPI app</label>
@@ -406,18 +405,13 @@
       <h3 id="settleTitle">Collect payment</h3>
       <p class="muted small" id="settleSub"></p>
       <div class="payamt" id="settleAmt"></div>
-      <div class="qrbox" id="settleQr"></div>
       <p class="small center" id="settleUpi"></p>
-      <div id="settleAlt"></div>
       <button class="ok wide big" id="btnCollected">Payment received</button>
     </div>
     <div id="settleStep2" hidden>
       <h3>Pay SafeShe's share for this ride</h3>
       <p class="muted small" id="shareSub"></p>
       <div class="payamt" id="shareAmt"></div>
-      <div class="qrbox" id="shareQr"></div>
-      <p class="small center" id="shareUpi"></p>
-      <button class="primary wide" id="btnSharePay">Pay with UPI app</button>
       <div id="shareAlt"></div>
       <label class="small muted" for="shareUtr">After paying, enter the UPI reference (UTR / UPI Ref No.)</label>
       <input id="shareUtr" type="text" inputmode="numeric" maxlength="35" placeholder="e.g. 412345678901">
@@ -456,7 +450,6 @@
 <script src="vendor/leaflet/leaflet.js"></script>
 <script src="vendor/maplibre/maplibre-gl.js"></script>
 <script src="vendor/maplibre/leaflet-maplibre-gl.js"></script>
-<script src="vendor/qrcode/qrcode.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
