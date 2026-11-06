@@ -48,7 +48,7 @@ import java.util.Locale;
  */
 public class MainActivity extends Activity {
 
-    static final class BuildInfo { static final String VERSION = "4.1"; }
+    static final class BuildInfo { static final String VERSION = "4.2"; }
 
     private static final int REQ_AUDIO = 1;
     private static final int REQ_LOCATION = 2;
@@ -78,6 +78,7 @@ public class MainActivity extends Activity {
         locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
 
         web = new WebView(this);
+        web.setBackgroundColor(0xFF0B7A43); // SafeShe green behind the opening animation (no white flash)
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);

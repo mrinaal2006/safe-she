@@ -9,6 +9,48 @@
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
+<!-- ======================= opening animation (plays on every app open; tap to skip) ======================= -->
+<div class="splash play" id="splash" aria-hidden="true">
+  <div class="splash-grid"></div>
+  <div class="splash-glow"></div>
+  <span class="spark s1"></span><span class="spark s2"></span><span class="spark s3"></span><span class="spark s4"></span><span class="spark s5"></span>
+  <div class="splash-center">
+    <div class="splash-logo">
+      <span class="ring r1"></span><span class="ring r2"></span><span class="ring r3"></span>
+      <svg viewBox="0 0 120 140" width="132" height="154">
+        <defs>
+          <linearGradient id="shieldFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#e6f5ec"/></linearGradient>
+        </defs>
+        <path class="shield-fill" d="M60 8 L104 26 L100 78 C96 104 80 122 60 132 C40 122 24 104 20 78 L16 26 Z" fill="url(#shieldFill)"/>
+        <path class="shield-line" d="M60 8 L104 26 L100 78 C96 104 80 122 60 132 C40 122 24 104 20 78 L16 26 Z" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round"/>
+        <path class="heart" d="M60 94 C40 80 33 67 33 58 C33 48 41 41 49 41 C54 41 58 44 60 48 C62 44 66 41 71 41 C79 41 87 48 87 58 C87 67 80 80 60 94 Z" fill="#0f9d58"/>
+        <path class="heart-shine" d="M44 52 C45 48 48 46 51 46" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/>
+      </svg>
+    </div>
+    <div class="splash-name"><span>S</span><span>a</span><span>f</span><span>e</span><span class="she">S</span><span class="she">h</span><span class="she">e</span></div>
+    <div class="splash-tag">Safe rides, every time.</div>
+  </div>
+  <svg class="splash-route" viewBox="0 0 400 220" preserveAspectRatio="xMidYMax meet">
+    <path id="splashRoute" class="route-line" d="M-20 190 C 60 120, 130 230, 210 150 S 300 80, 342 104" fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-dasharray="2 12"/>
+    <g class="rider">
+      <g transform="translate(-14,-14)">
+        <circle cx="7" cy="20" r="5" fill="#17201b" stroke="#fff" stroke-width="2"/>
+        <circle cx="23" cy="20" r="5" fill="#17201b" stroke="#fff" stroke-width="2"/>
+        <path d="M5 17 L12 9 L20 9 L26 17 Z" fill="#ffd54f" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/>
+        <circle cx="16" cy="5" r="3.5" fill="#fff"/>
+      </g>
+      <animateMotion id="riderMove" dur="1.6s" begin="indefinite" fill="freeze" rotate="auto" keyPoints="0;1" keyTimes="0;1" calcMode="spline" keySplines="0.45 0 0.25 1">
+        <mpath href="#splashRoute"/>
+      </animateMotion>
+    </g>
+    <g class="pin" transform="translate(342,104)">
+      <circle class="pin-pulse" r="10" fill="none" stroke="#fff" stroke-width="2"/>
+      <path d="M0 0 C-9 -12 -11 -16 -11 -21 C-11 -27 -6 -32 0 -32 C6 -32 11 -27 11 -21 C11 -16 9 -12 0 0 Z" fill="#e53935" stroke="#fff" stroke-width="2"/>
+      <circle cx="0" cy="-21" r="4" fill="#fff"/>
+    </g>
+  </svg>
+  <div class="splash-skip">Tap to skip</div>
+</div>
 
 <!-- ======================= server setup (APK without a baked-in server URL) ======================= -->
 <section class="screen center" id="scr-server" hidden>

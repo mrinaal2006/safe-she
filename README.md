@@ -102,9 +102,13 @@ verification needs a payment gateway (e.g. Razorpay, Cashfree). Some UPI apps li
 a business/merchant UPI ID works best.
 
 ## Android app
-Install `outputs/SafeShe-4.1.apk`. It connects to **https://safe-she-one.vercel.app** automatically, with no server
+Install `outputs/SafeShe-4.2.apk`. It connects to **https://safe-she-one.vercel.app** automatically, with no server
 address to type. `./safeshe-android/build.sh` builds with that address by default. Set `SAFESHE_SERVER_URL=https://…`
 to build for another server.
+
+**Opening animation:** every time the app opens (and when you come back after more than a minute away), a short animation
+plays: the shield draws in, the heart pops, SafeShe rises in and a scooter rides a route to the pin. It lasts about 2.5 s,
+and you can tap to skip. It never plays during a ride or an emergency. It's drawn in SVG/CSS, so it works offline and is tiny.
 
 The "Everything okay? / I'm safe" safety check after leaving the app is shown to **passengers only**, never to riders
 or the admin.

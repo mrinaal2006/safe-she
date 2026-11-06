@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Shown behind the opening animation while the app starts (no white flash). -->
+    <color name="splash_bg">#0B7A43</color>
+</resources>

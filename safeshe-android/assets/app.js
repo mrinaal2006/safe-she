@@ -1456,6 +1456,9 @@
     back: handleBack,
     onAppResumed: function (awayMs) {
       if (session && session.kind === "user") refreshActive();
+      // Replay the opening animation when coming back after a while, but never during a ride or an emergency.
+      var busy = curRide && ["requested", "accepted", "arrived", "started"].indexOf(curRide.status) >= 0;
+      if (awayMs >= SPLASH_AGAIN_MS && !busy && !driverRide && !sosOpen() && !$("check").classList.contains("show")) playSplash();
       // The "Everything okay? / I'm safe" check is for passengers only, never for riders or the admin.
       if (!session || session.kind !== "user" || role !== "passenger") return;
       var onRide = curRide && ["accepted", "arrived", "started"].indexOf(curRide.status) >= 0 && tripMonitorOn;
@@ -1484,6 +1487,28 @@
     }
   };
 
+  // ============================================================ opening animation
+  // Plays every time the app opens (≈2.5 s, tap to skip) and again after being away for over a minute.
+  var SPLASH_MS = 2550, SPLASH_AGAIN_MS = 60000, splashTimer = null;
+  function playSplash() {
+    var s = $("splash"); if (!s) return;
+    clearTimeout(splashTimer);
+    s.classList.remove("gone", "out", "play"); void s.offsetWidth; s.classList.add("play"); // restart CSS animations
+    var mv = document.getElementById("riderMove");
+    if (mv && mv.beginElement) setTimeout(function () { try { mv.beginElement(); } catch (e) {} }, 300);
+    var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    splashTimer = setTimeout(hideSplash, reduce ? 600 : SPLASH_MS);
+  }
+  function hideSplash() {
+    var s = $("splash"); if (!s || s.classList.contains("gone")) return;
+    clearTimeout(splashTimer);
+    s.classList.add("out");
+    setTimeout(function () { s.classList.add("gone"); s.classList.remove("play"); }, 460);
+  }
+  $("splash").addEventListener("click", hideSplash);
+  window.SafeSheSplash = { play: playSplash, hide: hideSplash };
+
+  playSplash();
   setRecUI();
   boot();
 })();
