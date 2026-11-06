@@ -376,6 +376,35 @@ async function step(name, fn) {
     assert.equal((await api('POST', '/api/admin/login', { username: 'owner.test@example.com', password: 'new-pass-123' })).status, 401, 'old email no longer works');
     assert.equal((await api('PUT', '/api/admin/email', { email: 'x@y.com' }, P.token)).status, 403, 'passengers cannot change it');
   });
+  await step('SMS: admin saves the 2Factor key in the panel → real SMS (no test mode); remove → test mode', async () => {
+    // Stand-in for 2Factor: accepts one key, rejects others; records SMS sends.
+    const realFetch = global.fetch, GOOD = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', sent = [];
+    global.fetch = async (url, opts) => {
+      const u = String(url);
+      if (!u.startsWith('https://2factor.in/')) return realFetch(url, opts);
+      const ok = u.includes('/' + GOOD + '/');
+      if (ok && u.includes('/SMS/') && !u.includes('/BAL/')) sent.push(u.split('/SMS/')[1]);
+      return { ok: true, status: 200, json: async () => (ok ? { Status: 'Success', Details: u.includes('/BAL/') ? '189.000000' : 'session' } : { Status: 'Error', Details: 'Invalid API Key' }) };
+    };
+    try {
+      assert.equal((await api('GET', '/api/health')).otpTestMode, true);
+      const st0 = await api('GET', '/api/admin/sms-status', null, A.token); assert.equal(st0.source, 'none'); assert.equal(st0.configured, false);
+      assert.equal((await api('PUT', '/api/admin/sms-key', { key: 'short' }, A.token)).status, 400, 'format check');
+      const bad = await api('PUT', '/api/admin/sms-key', { key: 'ffffffff-ffff-ffff-ffff-ffffffffffff' }, A.token);
+      assert.equal(bad.status, 400); assert.match(bad.error, /did not accept/);
+      const ok = await api('PUT', '/api/admin/sms-key', { key: GOOD }, A.token);
+      assert.equal(ok.status, 200, ok.error); assert.equal(ok.ok, true); assert.equal(ok.balance, '189'); assert.equal(ok.source, 'admin');
+      assert.equal(ok.keyHint, '••••eeee'); assert.ok(!JSON.stringify(ok).includes(GOOD), 'full key never returned');
+      assert.equal((await api('GET', '/api/health')).otpTestMode, false, 'live SMS now');
+      const s = await api('POST', '/api/auth/otp/send', { phone: '9876500055', role: 'passenger' });
+      assert.equal(s.status, 200, s.error); assert.equal(s.testMode, false); assert.equal(s.devCode, undefined, 'no code shown in real-SMS mode');
+      assert.equal(sent.length, 1); assert.match(sent[0], /^9876500055\/\d{6}$/);
+      assert.equal((await api('GET', '/api/admin/otps', null, A.token)).codes.length, 0, 'no test codes listed');
+      assert.equal((await api('PUT', '/api/admin/sms-key', { key: GOOD }, P.token)).status, 403, 'admin only');
+      const rm = await api('PUT', '/api/admin/sms-key', { key: '' }, A.token); assert.equal(rm.source, 'none');
+      assert.equal((await api('GET', '/api/health')).otpTestMode, true, 'back to test mode');
+    } finally { global.fetch = realFetch; }
+  });
   await step('geo search fails gracefully when map services are unreachable', async () => {
     const r = await api('GET', '/api/geo/search?q=Koramangala', null, P.token);
     assert.equal(r.status, 503); assert.match(r.error, /map/);

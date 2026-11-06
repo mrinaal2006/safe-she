@@ -1370,9 +1370,24 @@
       return Promise.all([api("GET", "/api/admin/otps"), api("GET", "/api/admin/sms-status").catch(function (e) { return { message: e.message }; })]).then(function (x) {
         var r = x[0], sms = x[1];
         c.innerHTML = "";
+        var srcText = sms.source === "env" ? "Key from Vercel settings (TWOFACTOR_API_KEY) " + (sms.keyHint || "")
+          : sms.source === "admin" ? "Key saved here in the admin panel " + (sms.keyHint || "") : "No key saved yet";
+        var keyIn = el("input", { type: "password", autocomplete: "off", spellcheck: "false", placeholder: "Paste your 2Factor API key (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)" });
         var box = el("section", { class: "card" }, el("h3", { text: "Login OTP delivery (SMS)" }),
           el("p", { class: "small " + (sms.ok ? "" : "status bad"), text: (sms.ok ? "✅ " : "⚠️ ") + sms.message }),
-          r.testMode ? el("p", { class: "small muted", text: "To send real SMS: create an account at 2factor.in, copy your API key, add it as TWOFACTOR_API_KEY in Vercel → Settings → Environment Variables, then redeploy. Until then, recent login codes are listed below." }) : null);
+          el("p", { class: "small muted", text: "This admin panel is connected to: " + (apiBase() || location.origin) + " · " + srcText }),
+          sms.source !== "env" ? el("div", null,
+            el("label", { class: "small muted", text: "2Factor API key (from 2factor.in → Account Summary). It's checked with 2Factor, then saved for every SafeShe server that uses this database." }),
+            el("div", { class: "filters" }, keyIn,
+              act("Save & check key", "primary", function () {
+                if (!keyIn.value.trim()) { toast("Paste the key first"); return; }
+                return api("PUT", "/api/admin/sms-key", { key: keyIn.value.trim() }).then(function (st) { keyIn.value = ""; toast(st.message, 5000); adminTab("settings", true); });
+              }),
+              sms.source === "admin" ? act("Remove key", "ghost", function () {
+                if (!confirm("Remove the saved 2Factor key? Login codes will stop being sent by SMS.")) return;
+                return api("PUT", "/api/admin/sms-key", { key: "" }).then(function () { adminTab("settings", true); });
+              }) : null)) : null,
+          r.testMode ? el("p", { class: "small muted", text: "Until a key is saved, login codes are not sent by SMS; the latest codes are listed below so you can still log people in." }) : null);
         if (!r.testMode) {
           var tp = el("input", { type: "tel", inputmode: "numeric", maxlength: "10", placeholder: "10-digit mobile number" });
           box.appendChild(el("div", { class: "filters" }, tp, act("Send test SMS", "primary", function () {

@@ -77,7 +77,7 @@ function createApp(cfg) {
       } else if (!(await db.one('SELECT COUNT(*) AS n FROM admins')).n) {
         log('[admin] WARNING: no admin account. Set ADMIN_PASSWORD (and optionally ADMIN_USERNAME) and redeploy.');
       }
-      if (otp.testMode) log('[otp] TEST MODE: no TWOFACTOR_API_KEY set, so OTPs are not sent by SMS (see admin panel → Settings).');
+      if (await otp.isTestMode()) log('[otp] TEST MODE: no 2Factor API key (env or Admin → Settings), so OTPs are not sent by SMS.');
     })().catch(e => { initP = null; throw e; });
     return initP;
   }
@@ -357,7 +357,7 @@ function createApp(cfg) {
     url: cfg.env.TILE_URL || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
     subdomains: cfg.env.TILE_SUBDOMAINS || 'abc', maxZoom: +cfg.env.TILE_MAX_ZOOM || 19,
     attribution: cfg.env.TILE_ATTRIBUTION || '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank">OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>' } }));
-  app.get('/api/health', wrap(async (req, res) => { await db.one('SELECT 1 AS ok'); res.json({ ok: true, otpTestMode: otp.testMode, node: process.version, time: now() }); }));
+  app.get('/api/health', wrap(async (req, res) => { await db.one('SELECT 1 AS ok'); res.json({ ok: true, otpTestMode: await otp.isTestMode(), node: process.version, time: now() }); }));
 
   // ---------------- auth
   app.post('/api/auth/otp/send', wrap(async (req, res) => {
@@ -729,7 +729,7 @@ function createApp(cfg) {
         - (SELECT COALESCE(SUM(amount), 0) FROM commission_payments WHERE status = 'confirmed') AS commission_due,
       (SELECT COUNT(*) FROM commission_payments WHERE status = 'pending') AS payments_pending`, [d0]);
     res.json({ passengers: s.passengers, riders: s.riders, ridersOnline: (await availableDrivers()).length, ridersPending: s.riders_pending,
-      activeRides: s.active_rides, ridesToday: s.rides_today, completedToday: s.completed_today, revenueToday: s.revenue_today, openSos: s.open_sos, otpTestMode: otp.testMode,
+      activeRides: s.active_rides, ridesToday: s.rides_today, completedToday: s.completed_today, revenueToday: s.revenue_today, openSos: s.open_sos, otpTestMode: await otp.isTestMode(),
       commissionToday: round2(s.commission_today), platformFeesToday: round2(s.platform_fees_today), rideFeesToday: round2(s.ride_fees_today),
       passesToday: s.passes_today, passRevenueToday: round2(s.pass_revenue_today),
       commissionDue: round2(Math.max(0, s.commission_due)), paymentsPending: s.payments_pending });
@@ -911,7 +911,12 @@ function createApp(cfg) {
     log(`[admin] payment ${req.params.id} ${st}`);
     res.json({ ok: true });
   }));
-  app.get('/api/admin/otps', admin, wrap(async (req, res) => res.json({ testMode: otp.testMode, codes: await otp.recentTestCodes() })));
+  app.get('/api/admin/otps', admin, wrap(async (req, res) => res.json({ testMode: await otp.isTestMode(), codes: await otp.recentTestCodes() })));
+  // Admin can enter the 2Factor API key here (checked with 2Factor, stored in the database, shown only masked).
+  app.put('/api/admin/sms-key', admin, wrap(async (req, res) => {
+    const st = await otp.saveKey(req.body && req.body.key);
+    res.json(st);
+  }));
   app.get('/api/admin/sms-status', admin, wrap(async (req, res) => res.json(await otp.smsStatus())));
   app.post('/api/admin/sms-test', admin, wrap(async (req, res) => {
     const phone = sec.normalizePhone(req.body.phone);

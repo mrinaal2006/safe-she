@@ -52,7 +52,8 @@ or `TILE_URL` (raster) on the server.
 
 ## SMS login codes (2Factor.in)
 1. Sign up at **2factor.in** and open **Dashboard → API Keys**. Copy your API key.
-2. Add it in Vercel as `TWOFACTOR_API_KEY`, then **Redeploy**.
+2. Either paste it in **Admin → Settings → Login OTP delivery → Save & check key** (stored in the database, works for
+   every deployment at once, no redeploy), or add it in Vercel as `TWOFACTOR_API_KEY` and **Redeploy**. The Vercel setting wins if both exist.
 3. Log in to the admin panel → **Settings**. It shows "✅ SMS sending is active. Balance: …". Use **Send test SMS**
    to check delivery to your phone.
 
@@ -102,7 +103,7 @@ verification needs a payment gateway (e.g. Razorpay, Cashfree). Some UPI apps li
 a business/merchant UPI ID works best.
 
 ## Android app
-Install `outputs/SafeShe-4.2.apk`. It connects to **https://safe-she-one.vercel.app** automatically, with no server
+Install `outputs/SafeShe-4.3.apk`. It connects to **https://safe-she-one.vercel.app** automatically, with no server
 address to type. `./safeshe-android/build.sh` builds with that address by default. Set `SAFESHE_SERVER_URL=https://…`
 to build for another server.
 
@@ -117,5 +118,5 @@ or the admin.
 ```bash
 npm install
 DATABASE_URL=postgres://… ADMIN_PASSWORD=… npm start      # http://localhost:8080
-TEST_DATABASE_URL=postgres://…/throwaway npm test          # 44 end-to-end checks (drops that DB's tables)
+TEST_DATABASE_URL=postgres://…/throwaway npm test          # 45 end-to-end checks (drops that DB's tables)
 ```
