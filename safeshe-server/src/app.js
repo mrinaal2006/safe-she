@@ -973,6 +973,23 @@ function createApp(cfg) {
     const rows = await db.q('SELECT a.*, u.name FROM bank_alerts a LEFT JOIN commission_payments p ON p.id = a.payment_id LEFT JOIN users u ON u.id = p.driver_id ORDER BY a.id DESC LIMIT 50');
     res.json({ alerts: rows.map(a => ({ id: a.id, utr: a.utr, amount: a.amount, vpa: a.vpa, source: a.source, receivedAt: a.received_at, paymentId: a.payment_id, rider: a.name || null })) });
   }));
+  // TEMPORARY: compare place-search request variants from this server (admin only).
+  app.get('/api/admin/geo-bench', admin, wrap(async (req, res) => {
+    const q = encodeURIComponent(String(req.query.q || 'brigade road')), out = {};
+    const urls = {
+      bboxBias: `https://photon.komoot.io/api/?limit=15&lang=en&q=${q}&bbox=77.3,12.7,77.9,13.2&lat=12.97&lon=77.59&zoom=12&location_bias_scale=0.3`,
+      bboxOnly: `https://photon.komoot.io/api/?limit=8&q=${q}&bbox=77.3,12.7,77.9,13.2`,
+      biasOnly: `https://photon.komoot.io/api/?limit=8&q=${q}&lat=12.97&lon=77.59`,
+      plain: `https://photon.komoot.io/api/?limit=8&q=${q}`,
+      nominatim: `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=8&q=${q}&viewbox=77.3,13.2,77.9,12.7&bounded=1`,
+    };
+    for (const [k, u] of Object.entries(urls)) {
+      const t = Date.now();
+      try { const r = await fetch(u, { headers: { 'User-Agent': 'SafeShe-Rides/1.0' }, signal: AbortSignal.timeout(10000) }); const j = await r.json(); out[k] = { ms: Date.now() - t, status: r.status, n: (j.features || j).length }; }
+      catch (e) { out[k] = { ms: Date.now() - t, error: e.message }; }
+    }
+    res.json({ region: process.env.VERCEL_REGION || null, out });
+  }));
   app.get('/api/admin/otps', admin, wrap(async (req, res) => res.json({ testMode: await otp.isTestMode(), codes: await otp.recentTestCodes() })));
   // Admin can enter the 2Factor API key here (checked with 2Factor, stored in the database, shown only masked).
   app.put('/api/admin/sms-key', admin, wrap(async (req, res) => {
