@@ -107,6 +107,21 @@ const SCHEMA = `
     ('bike','Bike',15,6,0.5,25,TRUE,1), ('auto','Auto',25,11,1,35,TRUE,2),
     ('cab','Cab',50,15,1.5,80,TRUE,3), ('pink','Pink Cab',55,16,1.5,90,TRUE,4)
   ON CONFLICT (vehicle) DO NOTHING;
+  -- Platform commission: per vehicle type, a flat ₹ amount or a % of the fare, charged per completed ride.
+  ALTER TABLE fares ADD COLUMN IF NOT EXISTS commission_type TEXT NOT NULL DEFAULT 'flat';
+  ALTER TABLE fares ADD COLUMN IF NOT EXISTS commission_value DOUBLE PRECISION NOT NULL DEFAULT 0;
+  ALTER TABLE rides ADD COLUMN IF NOT EXISTS commission DOUBLE PRECISION NOT NULL DEFAULT 0;
+  -- Riders pay their commission to the admin's UPI ID and report the UPI reference (UTR); the admin confirms it.
+  CREATE TABLE IF NOT EXISTS commission_payments (
+    id BIGSERIAL PRIMARY KEY,
+    driver_id BIGINT NOT NULL REFERENCES users(id),
+    amount DOUBLE PRECISION NOT NULL,
+    utr TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','confirmed','rejected')),
+    created_at BIGINT NOT NULL, reviewed_at BIGINT, note TEXT
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS commission_payments_utr ON commission_payments (UPPER(utr));
+  CREATE INDEX IF NOT EXISTS commission_payments_driver ON commission_payments (driver_id, status);
 `;
 
 function connectionString(env) {

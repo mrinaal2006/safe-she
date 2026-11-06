@@ -159,6 +159,47 @@ async function step(name, fn) {
     assert.equal((await api('GET', '/api/rides/history', null, P.token)).rides[0].status, 'completed');
     assert.equal((await api('GET', '/api/rides/history', null, D.token)).rides[0].fare, ride.fare);
   });
+  await step('commission: ₹8 per Pink Cab ride is charged to the rider on completion', async () => {
+    const h = await api('GET', '/api/rides/history', null, D.token);
+    assert.equal(h.rides[0].commission, 8);
+    assert.equal(h.rides[0].commission !== undefined && (await api('GET', '/api/rides/history', null, P.token)).rides[0].commission, undefined, 'passengers do not see commission');
+    const d = await api('GET', '/api/driver/dues', null, D.token);
+    assert.equal(d.charged, 8); assert.equal(d.due, 8); assert.equal(d.toPay, 8); assert.equal(d.upiId, '');
+  });
+  await step('commission: admin UPI settings, dues limit blocks going online', async () => {
+    assert.equal((await api('PUT', '/api/admin/payment-settings', { upiId: 'not a upi', payeeName: 'SafeShe' }, A.token)).status, 400);
+    const s = await api('PUT', '/api/admin/payment-settings', { upiId: 'safeshe.admin@okaxis', payeeName: 'SafeShe Rides', duesLimit: 5 }, A.token);
+    assert.equal(s.upiId, 'safeshe.admin@okaxis'); assert.equal(s.duesLimit, 5);
+    assert.equal((await api('GET', '/api/driver/dues', null, D.token)).upiId, 'safeshe.admin@okaxis');
+    const on = await api('POST', '/api/driver/online', { online: true, lat: 12.975, lng: 77.6 }, D.token);
+    assert.equal(on.status, 402); assert.match(on.error, /commission of ₹8/);
+    assert.equal((await api('PUT', '/api/admin/payment-settings', { upiId: 'x@y' }, P.token)).status, 403, 'only admin');
+  });
+  await step('commission: rider reports UPI payment → admin confirms → dues cleared', async () => {
+    assert.equal((await api('POST', '/api/driver/payments', { amount: 8, utr: '12' }, D.token)).status, 400, 'bad UTR');
+    const p = await api('POST', '/api/driver/payments', { amount: 8, utr: '4123 4567 8901' }, D.token);
+    assert.equal(p.status, 200, p.error); assert.equal(p.dues.pending, 8); assert.equal(p.dues.toPay, 0);
+    assert.equal((await api('POST', '/api/driver/payments', { amount: 8, utr: '412345678901' }, D.token)).status, 409, 'same UTR twice');
+    const ev = await waitFor(A.token, 'admin:payment'); assert.equal(ev.amount, 8);
+    assert.equal((await api('POST', '/api/driver/online', { online: true, lat: 12.975, lng: 77.6 }, D.token)).status, 200, 'pending payment unblocks');
+    const list = await api('GET', '/api/admin/payments?status=pending', null, A.token);
+    assert.equal(list.payments.length, 1); assert.equal(list.payments[0].utr, '412345678901');
+    assert.equal((await api('GET', '/api/admin/stats', null, A.token)).paymentsPending, 1);
+    assert.equal((await api('POST', `/api/admin/payments/${list.payments[0].id}/confirm`, {}, A.token)).status, 200);
+    assert.equal((await waitFor(D.token, 'payment:update')).status, 'confirmed');
+    const d = await api('GET', '/api/driver/dues', null, D.token); assert.equal(d.paid, 8); assert.equal(d.due, 0);
+    const dues = await api('GET', '/api/admin/dues', null, A.token); assert.equal(dues.totals.paid, 8); assert.equal(dues.totals.due, 0);
+    assert.equal((await api('POST', `/api/admin/payments/${list.payments[0].id}/confirm`, {}, A.token)).status, 404, 'cannot confirm twice');
+    await api('PUT', '/api/admin/payment-settings', { upiId: 'safeshe.admin@okaxis', payeeName: 'SafeShe Rides', duesLimit: 0 }, A.token);
+  });
+  await step('commission: admin can switch a vehicle to % of fare', async () => {
+    const f = await api('GET', '/api/admin/fares', null, A.token);
+    const bike = f.fares.find(x => x.vehicle === 'bike'); assert.equal(bike.commission_value, 5); assert.equal(bike.commission_type, 'flat');
+    bike.commission_type = 'percent'; bike.commission_value = 10;
+    const r = await api('PUT', '/api/admin/fares', { fares: [bike] }, A.token);
+    const b2 = r.fares.find(x => x.vehicle === 'bike'); assert.equal(b2.commission_type, 'percent'); assert.equal(b2.commission_value, 10);
+    bike.commission_value = 90; assert.equal((await api('PUT', '/api/admin/fares', { fares: [bike] }, A.token)).status, 400, 'max 50 %');
+  });
   await step('passenger cancels a requested ride; offer closed for rider', async () => {
     const r = await api('POST', '/api/rides', { pickup: BLR, drop: KORA, vehicle: 'cab' }, P.token);
     await waitFor(D.token, 'ride:offer', o => o.rideId === r.ride.id);

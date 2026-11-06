@@ -76,6 +76,9 @@ function createApp(cfg) {
         log('[admin] WARNING: no admin account. Set ADMIN_PASSWORD (and optionally ADMIN_USERNAME) and redeploy.');
       }
       if (otp.testMode) log('[otp] TEST MODE: no TWOFACTOR_API_KEY set, so OTPs are not sent by SMS (see admin panel → Settings).');
+      // Default commission (once): ₹5 bike, ₹6 auto, ₹8 cab / pink cab per completed ride. Editable in Admin → Fares.
+      if (await db.exec("INSERT INTO kv (key, value) VALUES ('commission_seeded', '1') ON CONFLICT (key) DO NOTHING"))
+        await db.exec("UPDATE fares SET commission_type = 'flat', commission_value = CASE vehicle WHEN 'bike' THEN 5 WHEN 'auto' THEN 6 ELSE 8 END WHERE commission_value = 0");
     })().catch(e => { initP = null; throw e; });
     return initP;
   }
@@ -144,6 +147,24 @@ function createApp(cfg) {
     return out;
   }
   const fares = () => db.q('SELECT * FROM fares ORDER BY sort');
+
+  // ---------------- commission (platform fee) owed by riders to the admin
+  const round2 = n => Math.round(n * 100) / 100;
+  const commissionFor = (f, fare) => !f ? 0 : round2(Math.max(0, f.commission_type === 'percent' ? fare * f.commission_value / 100 : f.commission_value));
+  const UPI_RE = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,64}$/;
+  async function paymentSettings() {
+    const rows = await db.q("SELECT key, value FROM kv WHERE key IN ('pay_upi', 'pay_name', 'pay_limit')");
+    const m = Object.fromEntries(rows.map(r => [r.key, r.value]));
+    return { upiId: m.pay_upi || '', payeeName: m.pay_name || 'SafeShe', duesLimit: +m.pay_limit || 0 };
+  }
+  async function duesFor(driverId) {
+    const r = await db.one(`SELECT
+      (SELECT COALESCE(SUM(commission), 0) FROM rides WHERE driver_id = $1 AND status = 'completed') AS charged,
+      (SELECT COALESCE(SUM(amount), 0) FROM commission_payments WHERE driver_id = $1 AND status = 'confirmed') AS paid,
+      (SELECT COALESCE(SUM(amount), 0) FROM commission_payments WHERE driver_id = $1 AND status = 'pending') AS pending`, [driverId]);
+    const due = round2(Math.max(0, r.charged - r.paid));
+    return { charged: round2(r.charged), paid: round2(r.paid), pending: round2(r.pending), due, toPay: round2(Math.max(0, due - r.pending)) };
+  }
   const fareFor = (f, km, min) => Math.round(Math.max(f.min_fare, f.base + f.per_km * km + f.per_min * min));
   const shareUrl = token => (cfg.publicUrl || '') + '/t/' + token;
 
@@ -174,6 +195,7 @@ function createApp(cfg) {
       } : null,
     };
     if (viewer === 'passenger' || viewer === 'admin') { out.otp = r.otp; out.shareUrl = shareUrl(r.share_token); out.shareToken = r.share_token; }
+    if (viewer === 'driver' || viewer === 'admin') out.commission = r.commission || 0;
     return out;
   }
 
@@ -439,6 +461,13 @@ function createApp(cfg) {
     await requireApproved(req.user);
     const on = !!req.body.online, p = point(req.body);
     if (on && !p) throw httpError(400, 'Location is required to go online.');
+    if (on) {
+      const ps = await paymentSettings();
+      if (ps.duesLimit > 0) {
+        const d = await duesFor(req.user.id);
+        if (d.toPay > ps.duesLimit) throw httpError(402, `Please pay your SafeShe commission of ₹${d.toPay} to go online (limit ₹${ps.duesLimit}).`);
+      }
+    }
     if (!on && await activeRideFor(req.user.id, 'driver')) throw httpError(409, 'Finish your current ride before going offline.');
     if (p) await db.exec('UPDATE drivers SET online = $1, lat = $2, lng = $3, loc_at = $4, updated_at = $4 WHERE user_id = $5', [on, p.lat, p.lng, now(), req.user.id]);
     else await db.exec('UPDATE drivers SET online = $1, updated_at = $2 WHERE user_id = $3', [on, now(), req.user.id]);
@@ -475,7 +504,9 @@ function createApp(cfg) {
     if (!r || r.driver_id !== req.user.id) throw httpError(404, 'Ride not found.');
     if (!from.includes(r.status)) throw httpError(409, `Ride is ${r.status}.`);
     if (otpCheck && !sec.safeEqual(str(req.body.otp, 4), r.otp)) throw httpError(400, 'Wrong OTP. Ask the passenger for the 4-digit ride OTP.');
-    const ch = await db.exec(`UPDATE rides SET status = $1, ${col} = $2 WHERE id = $3 AND status = ANY($4)`, [to, now(), r.id, from]);
+    // On completion, record the platform commission for this ride (current rate for its vehicle type).
+    const commission = to === 'completed' ? commissionFor((await fares()).find(f => f.vehicle === r.vehicle), r.fare) : r.commission;
+    const ch = await db.exec(`UPDATE rides SET status = $1, ${col} = $2, commission = $5 WHERE id = $3 AND status = ANY($4)`, [to, now(), r.id, from, commission]);
     if (!ch) throw httpError(409, 'The ride changed. Please refresh.');
     log(`[ride ${r.id}] ${to}`);
     await pushRide(r.id);
@@ -484,6 +515,30 @@ function createApp(cfg) {
   app.post('/api/rides/:id/arrived', auth('driver'), wrap(async (req, res) => res.json({ ride: await driverStep(req, ['accepted'], 'arrived', 'arrived_at') })));
   app.post('/api/rides/:id/start', auth('driver'), wrap(async (req, res) => res.json({ ride: await driverStep(req, ['arrived', 'accepted'], 'started', 'started_at', true) })));
   app.post('/api/rides/:id/complete', auth('driver'), wrap(async (req, res) => res.json({ ride: await driverStep(req, ['started'], 'completed', 'completed_at') })));
+
+  // ---------------- rider: commission dues and UPI payments to the admin
+  app.get('/api/driver/dues', auth('driver'), wrap(async (req, res) => {
+    const [dues, ps, payments, recent] = await Promise.all([
+      duesFor(req.user.id), paymentSettings(),
+      db.q('SELECT id, amount, utr, status, created_at, reviewed_at, note FROM commission_payments WHERE driver_id = $1 ORDER BY id DESC LIMIT 20', [req.user.id]),
+      db.q("SELECT id, vehicle, fare, commission, completed_at FROM rides WHERE driver_id = $1 AND status = 'completed' ORDER BY id DESC LIMIT 20", [req.user.id]),
+    ]);
+    res.json({ ...dues, upiId: ps.upiId, payeeName: ps.payeeName, duesLimit: ps.duesLimit,
+      payments: payments.map(p => ({ id: p.id, amount: p.amount, utr: p.utr, status: p.status, createdAt: p.created_at, reviewedAt: p.reviewed_at, note: p.note })),
+      rides: recent.map(r => ({ id: r.id, vehicle: r.vehicle, fare: r.fare, commission: r.commission, completedAt: r.completed_at })) });
+  }));
+  app.post('/api/driver/payments', auth('driver'), wrap(async (req, res) => {
+    await rateLimit('pay:' + req.user.id, 10, 3600_000);
+    const amount = num(req.body.amount, 1, 100000);
+    const utr = str(req.body.utr, 40).replace(/\s+/g, '').toUpperCase();
+    if (!amount) throw httpError(400, 'Enter the amount you paid.');
+    if (!/^[A-Z0-9]{6,35}$/.test(utr)) throw httpError(400, 'Enter the UPI transaction reference (UTR / UPI Ref No.), usually 12 digits, from your UPI app.');
+    if (await db.one('SELECT 1 AS x FROM commission_payments WHERE UPPER(utr) = $1', [utr])) throw httpError(409, 'This UPI reference was already submitted.');
+    const p = await db.one('INSERT INTO commission_payments (driver_id, amount, utr, created_at) VALUES ($1,$2,$3,$4) RETURNING id', [req.user.id, round2(amount), utr, now()]);
+    log(`[payment ${p.id}] rider ${req.user.id} reported ₹${amount} (UTR ${utr})`);
+    await emit('admins', 'admin:payment', { id: p.id, driverId: req.user.id, name: req.user.name, amount: round2(amount) });
+    res.json({ ok: true, id: p.id, dues: await duesFor(req.user.id) });
+  }));
 
   // ---------------- SOS + public tracking
   async function sosView(s) {
@@ -525,9 +580,13 @@ function createApp(cfg) {
       (SELECT COUNT(*) FROM rides WHERE requested_at >= $1) AS rides_today,
       (SELECT COUNT(*) FROM rides WHERE status = 'completed' AND completed_at >= $1) AS completed_today,
       (SELECT COALESCE(SUM(fare), 0) FROM rides WHERE status = 'completed' AND completed_at >= $1) AS revenue_today,
-      (SELECT COUNT(*) FROM sos WHERE resolved_at IS NULL) AS open_sos`, [d0]);
+      (SELECT COUNT(*) FROM sos WHERE resolved_at IS NULL) AS open_sos,
+      (SELECT COALESCE(SUM(commission), 0) FROM rides WHERE status = 'completed' AND completed_at >= $1) AS commission_today,
+      (SELECT COALESCE(SUM(commission), 0) FROM rides WHERE status = 'completed') - (SELECT COALESCE(SUM(amount), 0) FROM commission_payments WHERE status = 'confirmed') AS commission_due,
+      (SELECT COUNT(*) FROM commission_payments WHERE status = 'pending') AS payments_pending`, [d0]);
     res.json({ passengers: s.passengers, riders: s.riders, ridersOnline: (await availableDrivers()).length, ridersPending: s.riders_pending,
-      activeRides: s.active_rides, ridesToday: s.rides_today, completedToday: s.completed_today, revenueToday: s.revenue_today, openSos: s.open_sos, otpTestMode: otp.testMode });
+      activeRides: s.active_rides, ridesToday: s.rides_today, completedToday: s.completed_today, revenueToday: s.revenue_today, openSos: s.open_sos, otpTestMode: otp.testMode,
+      commissionToday: round2(s.commission_today), commissionDue: round2(Math.max(0, s.commission_due)), paymentsPending: s.payments_pending });
   }));
   app.get('/api/admin/riders', admin, wrap(async (req, res) => {
     const st = ['pending', 'approved', 'rejected'].includes(req.query.status) ? req.query.status : null;
@@ -600,10 +659,56 @@ function createApp(cfg) {
       if (!VEHICLES.includes(f.vehicle)) continue;
       const vals = [num(f.base, 0, 10000), num(f.per_km, 0, 1000), num(f.per_min, 0, 1000), num(f.min_fare, 0, 10000)];
       if (vals.some(v => v == null)) throw httpError(400, `Invalid fare values for ${f.vehicle}.`);
-      await db.exec('UPDATE fares SET name=$1, base=$2, per_km=$3, per_min=$4, min_fare=$5, active=$6 WHERE vehicle=$7', [str(f.name, 30) || f.vehicle, ...vals, !!f.active, f.vehicle]);
+      const ctype = f.commission_type === 'percent' ? 'percent' : 'flat';
+      const cval = num(f.commission_value == null ? 0 : f.commission_value, 0, ctype === 'percent' ? 50 : 1000);
+      if (cval == null) throw httpError(400, `Invalid commission for ${f.vehicle} (${ctype === 'percent' ? '0–50 %' : '₹0–1000'}).`);
+      await db.exec('UPDATE fares SET name=$1, base=$2, per_km=$3, per_min=$4, min_fare=$5, active=$6, commission_type=$7, commission_value=$8 WHERE vehicle=$9',
+        [str(f.name, 30) || f.vehicle, ...vals, !!f.active, ctype, cval, f.vehicle]);
     }
     log('[admin] fares updated');
     res.json({ fares: await fares() });
+  }));
+
+  // ---------------- admin: UPI settings, commission dues, payment review
+  app.get('/api/admin/payment-settings', admin, wrap(async (req, res) => res.json(await paymentSettings())));
+  app.put('/api/admin/payment-settings', admin, wrap(async (req, res) => {
+    const upi = str(req.body.upiId, 300).replace(/\s+/g, '');
+    if (upi && !UPI_RE.test(upi)) throw httpError(400, 'Enter a valid UPI ID, e.g. yourname@okaxis or 9876543210@ybl.');
+    const name = str(req.body.payeeName, 60) || 'SafeShe';
+    const limit = num(req.body.duesLimit == null || req.body.duesLimit === '' ? 0 : req.body.duesLimit, 0, 100000);
+    if (limit == null) throw httpError(400, 'Dues limit must be a number (0 = no limit).');
+    for (const [k, v] of [['pay_upi', upi], ['pay_name', name], ['pay_limit', String(limit)]])
+      await db.exec('INSERT INTO kv (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', [k, v]);
+    log('[admin] payment settings updated');
+    res.json(await paymentSettings());
+  }));
+  app.get('/api/admin/dues', admin, wrap(async (req, res) => {
+    const rows = await db.q(`SELECT u.id, u.name, u.phone, d.vehicle_type, d.plate,
+        COALESCE((SELECT SUM(commission) FROM rides r WHERE r.driver_id = u.id AND r.status = 'completed'), 0) AS charged,
+        COALESCE((SELECT SUM(amount) FROM commission_payments p WHERE p.driver_id = u.id AND p.status = 'confirmed'), 0) AS paid,
+        COALESCE((SELECT SUM(amount) FROM commission_payments p WHERE p.driver_id = u.id AND p.status = 'pending'), 0) AS pending
+      FROM users u JOIN drivers d ON d.user_id = u.id ORDER BY u.id DESC LIMIT 500`);
+    const riders = rows.map(r => ({ id: r.id, name: r.name, phone: r.phone, vehicleType: r.vehicle_type, plate: r.plate,
+      charged: round2(r.charged), paid: round2(r.paid), pending: round2(r.pending), due: round2(Math.max(0, r.charged - r.paid)) }))
+      .filter(r => r.charged > 0 || r.pending > 0).sort((a, b) => b.due - a.due);
+    const totals = riders.reduce((t, r) => ({ charged: t.charged + r.charged, paid: t.paid + r.paid, due: t.due + r.due, pending: t.pending + r.pending }), { charged: 0, paid: 0, due: 0, pending: 0 });
+    Object.keys(totals).forEach(k => { totals[k] = round2(totals[k]); });
+    res.json({ riders, totals });
+  }));
+  app.get('/api/admin/payments', admin, wrap(async (req, res) => {
+    const st = ['pending', 'confirmed', 'rejected'].includes(req.query.status) ? req.query.status : null;
+    const rows = await db.q(`SELECT p.*, u.name, u.phone FROM commission_payments p JOIN users u ON u.id = p.driver_id ${st ? 'WHERE p.status = $1' : ''} ORDER BY p.id DESC LIMIT 200`, st ? [st] : []);
+    res.json({ payments: rows.map(p => ({ id: p.id, driverId: p.driver_id, name: p.name, phone: p.phone, amount: p.amount, utr: p.utr, status: p.status, createdAt: p.created_at, reviewedAt: p.reviewed_at, note: p.note })) });
+  }));
+  app.post('/api/admin/payments/:id/:action', admin, wrap(async (req, res) => {
+    const act = req.params.action;
+    if (act !== 'confirm' && act !== 'reject') throw httpError(400, 'Unknown action.');
+    const st = act === 'confirm' ? 'confirmed' : 'rejected';
+    const p = await db.one("UPDATE commission_payments SET status = $1, reviewed_at = $2, note = $3 WHERE id = $4 AND status = 'pending' RETURNING driver_id, amount", [st, now(), str(req.body.note, 300) || null, +req.params.id || 0]);
+    if (!p) throw httpError(404, 'Payment not found or already reviewed.');
+    await emit('user:' + p.driver_id, 'payment:update', { id: +req.params.id, status: st, amount: p.amount });
+    log(`[admin] payment ${req.params.id} ${st}`);
+    res.json({ ok: true });
   }));
   app.get('/api/admin/otps', admin, wrap(async (req, res) => res.json({ testMode: otp.testMode, codes: await otp.recentTestCodes() })));
   app.get('/api/admin/sms-status', admin, wrap(async (req, res) => res.json(await otp.smsStatus())));

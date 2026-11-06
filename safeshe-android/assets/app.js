@@ -93,7 +93,9 @@
     "driver:status": function (d) { toast(d.status === "approved" ? "You're approved! You can go online now." : "Your rider application was not approved."); boot(); },
     "admin:sos": function (s) { vibrate(600); beep(); toast("🆘 SOS from " + ((s.user && s.user.name) || "a user") + "!", 6000); adminLive("sos"); },
     "admin:ride": function () { adminLive("ride"); },
-    "admin:driver_pending": function () { toast("New rider waiting for approval"); adminLive("rider"); }
+    "admin:driver_pending": function () { toast("New rider waiting for approval"); adminLive("rider"); },
+    "admin:payment": function (p) { toast("💰 " + (p.name || "A rider") + " reported a commission payment of " + rupees(p.amount), 5000); adminLive("payment"); },
+    "payment:update": function (p) { toast(p.status === "confirmed" ? "✅ Your payment of " + rupees(p.amount) + " was confirmed" : "❌ Your payment of " + rupees(p.amount) + " was not verified. Check the UPI reference.", 6000); loadDues(); }
   };
   function connectSocket() { // name kept for the callers; starts the event poller
     stopLive();
@@ -661,7 +663,7 @@
     if (step === "start" && body.otp.length !== 4) { toast("Enter the passenger's 4-digit OTP."); return; }
     var btn = this; btn.disabled = true;
     api("POST", "/api/rides/" + r.id + "/" + step, body).then(function (x) {
-      if (step === "complete") { toast("Ride completed · " + (x.ride.payment === "upi" ? "UPI payment" : "collect " + rupees(x.ride.fare) + " cash"), 5000); endDriverRide(); }
+      if (step === "complete") { toast("Ride completed · " + (x.ride.payment === "upi" ? "UPI payment" : "collect " + rupees(x.ride.fare) + " cash") + (x.ride.commission ? " · SafeShe commission " + rupees2(x.ride.commission) : ""), 6000); endDriverRide(); }
       else setDriverRide(x.ride);
     }).catch(function (e) { toast(e.message, 4000); }).then(function () { btn.disabled = false; });
   };
@@ -682,7 +684,47 @@
       $("ridesToday").textContent = today.length;
     }).catch(function () {});
     api("GET", "/api/me").then(function (r) { me = r.user; renderMe(); $("myRating").textContent = me.driver && me.driver.rating ? "★ " + me.driver.rating : "–"; }).catch(function () {});
+    loadDues();
   }
+
+  // ---------------- rider: commission owed to SafeShe (paid to the admin's UPI ID)
+  var dues = null;
+  function loadDues() {
+    if (role !== "driver") return;
+    api("GET", "/api/driver/dues").then(function (d) {
+      dues = d; var box = $("duesBox");
+      box.hidden = !(d.charged > 0 || d.pending > 0);
+      box.classList.toggle("clear", d.toPay <= 0);
+      $("duesAmt").textContent = rupees2(d.toPay);
+      $("btnPayUpi").hidden = d.toPay <= 0 || !d.upiId;
+      var info = [];
+      if (d.toPay <= 0) info.push("All clear. Thank you!");
+      if (d.pending > 0) info.push(rupees2(d.pending) + " waiting for admin verification.");
+      if (d.toPay > 0 && !d.upiId) info.push("The admin hasn't set a UPI ID yet.");
+      if (d.toPay > 0 && d.upiId) info.push("Pay to " + d.upiId + " (" + d.payeeName + ").");
+      if (d.duesLimit > 0) info.push("You can stay online while dues are up to " + rupees(d.duesLimit) + ".");
+      $("duesInfo").textContent = info.join(" ");
+      if (!$("utrAmt").value && d.toPay > 0) $("utrAmt").value = Math.ceil(d.toPay);
+      syncSheet();
+    }).catch(function () {});
+  }
+  function rupees2(n) { n = Math.round((n || 0) * 100) / 100; return "₹" + (n % 1 ? n.toFixed(2) : n); }
+  $("btnPayUpi").onclick = function () {
+    if (!dues || !dues.upiId) return;
+    var amt = Math.ceil(dues.toPay);
+    var link = "upi://pay?pa=" + encodeURIComponent(dues.upiId).replace(/%40/g, "@") + "&pn=" + encodeURIComponent(dues.payeeName || "SafeShe") +
+      "&am=" + amt.toFixed(2) + "&cu=INR&tn=" + encodeURIComponent("SafeShe commission " + (me ? me.phone : ""));
+    $("utrAmt").value = amt; $("utrForm").hidden = false; $("btnUtrToggle").hidden = true;
+    openUrl(link);
+    toast("Complete the payment in your UPI app, then enter the UPI reference here.", 5000);
+  };
+  $("btnUtrToggle").onclick = function () { $("utrForm").hidden = false; this.hidden = true; syncSheet(); };
+  $("btnUtrSubmit").onclick = function () {
+    var btn = this; btn.disabled = true;
+    api("POST", "/api/driver/payments", { utr: $("utrInput").value, amount: +$("utrAmt").value })
+      .then(function () { toast("Payment submitted. The admin will verify it shortly.", 5000); $("utrInput").value = ""; $("utrAmt").value = ""; $("utrForm").hidden = true; $("btnUtrToggle").hidden = false; loadDues(); })
+      .catch(function (e) { toast(e.message, 5000); }).then(function () { btn.disabled = false; });
+  };
 
   // ============================================================ history page
   function renderHistory() {
@@ -859,7 +901,7 @@
     if (!session || session.kind !== "admin") return;
     clearTimeout(adminTimer);
     adminTimer = setTimeout(function () {
-      if (adminCur === "dash" || (kind === "sos" && adminCur === "sos") || (kind === "ride" && adminCur === "rides") || (kind === "rider" && adminCur === "riders")) adminTab(adminCur, true);
+      if (adminCur === "dash" || (kind === "sos" && adminCur === "sos") || (kind === "ride" && adminCur === "rides") || (kind === "rider" && adminCur === "riders") || (kind === "payment" && adminCur === "payments")) adminTab(adminCur, true);
       updateSosBadge();
     }, kind === "sos" ? 0 : 800);
   }
@@ -921,7 +963,9 @@
         function k(label, v, alert) { return el("div", { class: "kpi" + (alert ? " alert" : "") }, el("small", { text: label }), el("b", { text: v })); }
         c.appendChild(el("div", { class: "kpis" },
           k("Open SOS alerts", s.openSos, s.openSos > 0), k("Active rides", s.activeRides), k("Riders online", s.ridersOnline), k("Riders pending approval", s.ridersPending, s.ridersPending > 0),
-          k("Rides today", s.ridesToday), k("Completed today", s.completedToday), k("Revenue today", rupees(s.revenueToday)), k("Passengers", s.passengers), k("Riders", s.riders)));
+          k("Rides today", s.ridesToday), k("Completed today", s.completedToday), k("Revenue today", rupees(s.revenueToday)),
+          k("Commission today", rupees(s.commissionToday)), k("Commission due from riders", rupees(s.commissionDue)), k("Payments to verify", s.paymentsPending, s.paymentsPending > 0),
+          k("Passengers", s.passengers), k("Riders", s.riders)));
         if (s.otpTestMode) c.appendChild(el("p", { class: "testcode", text: "OTP test mode: no SMS provider is configured, so login codes are shown in Settings. Set TWOFACTOR_API_KEY on the server to send real SMS." }));
         c.appendChild(el("h3", { text: "Open SOS alerts" }));
         c.appendChild(x[1].sos.length ? el("div", { class: "list" }, x[1].sos.map(sosItem)) : el("p", { class: "muted", text: "No open alerts." }));
@@ -977,6 +1021,34 @@
         })) : el("p", { class: "muted", text: "No users found." }));
       });
     },
+    payments: function (c) {
+      var f = adminFilter.payments || "pending";
+      return Promise.all([api("GET", "/api/admin/payments" + (f === "all" ? "" : "?status=" + f)), api("GET", "/api/admin/dues"), api("GET", "/api/admin/payment-settings")]).then(function (x) {
+        var pays = x[0].payments, d = x[1], ps = x[2]; c.innerHTML = "";
+        if (!ps.upiId) c.appendChild(el("p", { class: "testcode", text: "Set your UPI ID in Settings → Payments so riders can pay their commission." }));
+        function k(label, v, alert) { return el("div", { class: "kpi" + (alert ? " alert" : "") }, el("small", { text: label }), el("b", { text: v })); }
+        c.appendChild(el("div", { class: "kpis" }, k("Total commission", rupees(d.totals.charged)), k("Received (confirmed)", rupees(d.totals.paid)), k("Still due", rupees(d.totals.due), d.totals.due > 0), k("Waiting to verify", rupees(d.totals.pending), d.totals.pending > 0)));
+        c.appendChild(el("h3", { text: "Payments reported by riders" }));
+        c.appendChild(filterChips(["pending", "confirmed", "rejected", "all"], f, function (v) { adminFilter.payments = v; adminTab("payments"); }));
+        c.appendChild(el("p", { class: "muted small", text: "Check each UPI reference (UTR) in your bank or UPI app before confirming." }));
+        c.appendChild(pays.length ? el("div", { class: "list" }, pays.map(function (p) {
+          return el("div", { class: "item" },
+            el("div", { class: "between" }, el("h4", { text: rupees(p.amount) + " · " + (p.name || "Rider") }), el("span", { class: "pill " + (p.status === "pending" ? "amber" : p.status === "rejected" ? "red" : ""), text: p.status })),
+            el("div", { class: "small" }, "UTR ", el("span", { class: "upiid", text: p.utr }), " · " + p.phone + " · " + when(p.createdAt)),
+            p.note ? el("div", { class: "small muted", text: "Note: " + p.note }) : null,
+            p.status === "pending" ? el("div", { class: "acts" },
+              act("✓ Confirm received", "ok", function () { return api("POST", "/api/admin/payments/" + p.id + "/confirm", {}).then(function () { toast("Payment confirmed"); adminTab("payments", true); }); }),
+              act("Reject", "ghost", function () { var n = prompt("Reason (shown to the rider)", "Payment not found in UPI statement"); if (n === null) return; return api("POST", "/api/admin/payments/" + p.id + "/reject", { note: n }).then(function () { adminTab("payments", true); }); })) : null);
+        })) : el("p", { class: "muted", text: "No payments here." }));
+        c.appendChild(el("h3", { text: "Commission by rider" }));
+        c.appendChild(d.riders.length ? el("div", { class: "list" }, d.riders.map(function (r) {
+          return el("div", { class: "item" },
+            el("div", { class: "between" }, el("h4", { text: (r.name || "Rider") + " · " + (r.plate || "") }), el("b", { text: rupees(r.due) + " due" })),
+            el("div", { class: "small muted", text: r.phone + " · total " + rupees(r.charged) + " · paid " + rupees(r.paid) + (r.pending ? " · " + rupees(r.pending) + " to verify" : "") }),
+            el("div", { class: "acts" }, act("📞 Call", "ghost", function () { dial(r.phone); })));
+        })) : el("p", { class: "muted", text: "No commission yet. It is added when riders complete rides." }));
+      });
+    },
     fares: function (c) {
       return api("GET", "/api/admin/fares").then(function (r) {
         c.innerHTML = "";
@@ -986,13 +1058,15 @@
           var o = { vehicle: f.vehicle };
           function cell(k, type) { var i = el("input", { type: type || "number", step: "0.5", min: "0", value: f[k] }); o[k] = i; return el("td", null, i); }
           var chk = el("input", { type: "checkbox" }); chk.checked = !!f.active; o.active = chk;
+          var ct = el("select", null, el("option", { value: "flat", text: "₹ per ride" }), el("option", { value: "percent", text: "% of fare" })); ct.value = f.commission_type || "flat"; o.commission_type = ct;
           inputs.push(o);
-          return el("tr", null, el("td", { text: VEH_ICON[f.vehicle] }), cell("name", "text"), cell("base"), cell("per_km"), cell("per_min"), cell("min_fare"), el("td", null, chk));
+          return el("tr", null, el("td", { text: VEH_ICON[f.vehicle] }), cell("name", "text"), cell("base"), cell("per_km"), cell("per_min"), cell("min_fare"), cell("commission_value"), el("td", null, ct), el("td", null, chk));
         });
         c.appendChild(el("div", { class: "tablewrap" }, el("table", { class: "fares" },
-          el("tr", null, ["", "Name", "Base ₹", "Per km ₹", "Per min ₹", "Minimum ₹", "Active"].map(function (h) { return el("th", { text: h }); })), rows)));
+          el("tr", null, ["", "Name", "Base ₹", "Per km ₹", "Per min ₹", "Minimum ₹", "Commission", "Type", "Active"].map(function (h) { return el("th", { text: h }); })), rows)));
+        c.appendChild(el("p", { class: "muted small", text: "Commission is what riders pay to SafeShe for each completed ride (e.g. ₹5 per bike ride, or 10 % of the fare). Riders pay it to your UPI ID (Settings → Payments)." }));
         c.appendChild(act("Save fares", "primary", function () {
-          var body = { fares: inputs.map(function (o) { return { vehicle: o.vehicle, name: o.name.value, base: +o.base.value, per_km: +o.per_km.value, per_min: +o.per_min.value, min_fare: +o.min_fare.value, active: o.active.checked }; }) };
+          var body = { fares: inputs.map(function (o) { return { vehicle: o.vehicle, name: o.name.value, base: +o.base.value, per_km: +o.per_km.value, per_min: +o.per_min.value, min_fare: +o.min_fare.value, active: o.active.checked, commission_value: +o.commission_value.value, commission_type: o.commission_type.value }; }) };
           return api("PUT", "/api/admin/fares", body).then(function () { toast("Fares saved"); });
         }));
       });
@@ -1012,6 +1086,20 @@
         }
         if (r.testMode) box.appendChild(r.codes.length ? el("div", { class: "list" }, r.codes.map(function (x) { return el("div", { class: "small", text: x.phone + " → " + x.code + " · " + when(x.at) }); })) : el("p", { class: "muted small", text: "No codes requested yet." }));
         c.appendChild(box);
+        // Payments: the admin's UPI ID that riders pay their commission to
+        var upi = el("input", { type: "text", autocomplete: "off", autocapitalize: "off", placeholder: "your UPI ID, e.g. yourname@okaxis" });
+        var pname = el("input", { type: "text", placeholder: "Name shown in the UPI app (e.g. SafeShe)" });
+        var lim = el("input", { type: "number", min: "0", step: "10", placeholder: "0 = no limit" });
+        api("GET", "/api/admin/payment-settings").then(function (p) { upi.value = p.upiId; pname.value = p.payeeName; lim.value = p.duesLimit || ""; }).catch(function () {});
+        c.appendChild(el("section", { class: "card" }, el("h3", { text: "Payments (UPI)" }),
+          el("p", { class: "small muted", text: "Riders pay their SafeShe commission to this UPI ID. Use a UPI ID you own; a business/merchant UPI ID works best with all UPI apps." }),
+          el("label", { class: "small muted", text: "UPI ID" }), upi, el("div", { style: "height:6px" }),
+          el("label", { class: "small muted", text: "Payee name" }), pname, el("div", { style: "height:6px" }),
+          el("label", { class: "small muted", text: "Block riders from going online when unpaid commission is above (₹)" }), lim, el("div", { style: "height:8px" }),
+          act("Save payment settings", "primary", function () {
+            return api("PUT", "/api/admin/payment-settings", { upiId: upi.value.trim(), payeeName: pname.value.trim(), duesLimit: lim.value === "" ? 0 : +lim.value })
+              .then(function (p) { upi.value = p.upiId; toast(p.upiId ? "Saved. Riders will pay to " + p.upiId : "Saved (no UPI ID set)"); });
+          })));
         var em = el("input", { type: "email", autocomplete: "email", placeholder: "admin email, e.g. name@gmail.com" });
         api("GET", "/api/admin/me").then(function (m) { em.value = (m.admin && m.admin.email) || ""; }).catch(function () {});
         c.appendChild(el("section", { class: "card" }, el("h3", { text: "Admin email" }),

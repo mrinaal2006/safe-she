@@ -229,3 +229,9 @@ table.fares { width: 100%; border-collapse: collapse; background: #fff; border-r
 table.fares th, table.fares td { padding: 8px; border-bottom: 1px solid var(--line); text-align: left; }
 table.fares input { padding: 6px 8px; min-width: 60px; }
 .tablewrap { overflow-x: auto; }
+/* rider commission dues */
+.duesbox { border: 1px solid #f5c242; background: #fffaf0; border-radius: 14px; padding: 10px 12px; margin-bottom: 12px; }
+.duesbox b { display: block; font-size: 22px; }
+.duesbox.clear { border-color: #bfe3cc; background: var(--accent-soft); }
+.duesbox .link { padding: 4px 0 0; }
+.upiid { font-family: ui-monospace, monospace; background: #fff; border: 1px dashed var(--line); padding: 2px 6px; border-radius: 6px; }

@@ -207,6 +207,17 @@
         <div><small>Rides</small><b id="ridesToday">0</b></div>
         <div><small>Rating</small><b id="myRating">–</b></div>
       </div>
+      <div class="duesbox" id="duesBox" hidden>
+        <div class="between"><div><small class="muted">SafeShe commission due</small><b id="duesAmt">₹0</b></div>
+          <button class="primary small" id="btnPayUpi">Pay via UPI</button></div>
+        <p class="muted small" id="duesInfo"></p>
+        <div id="utrForm" hidden>
+          <label class="small muted" for="utrInput">After paying, enter the UPI reference (UTR / UPI Ref No.) from your UPI app</label>
+          <div class="filters"><input id="utrInput" type="text" inputmode="numeric" maxlength="35" placeholder="e.g. 412345678901"><input id="utrAmt" type="number" min="1" step="1" style="max-width:110px" placeholder="₹"></div>
+          <button class="ghost wide" id="btnUtrSubmit">Submit payment for verification</button>
+        </div>
+        <button class="link small" id="btnUtrToggle">Already paid? Enter UPI reference</button>
+      </div>
       <ul class="offers" id="offers"></ul>
       <p class="muted small" id="dvHint">Keep SafeShe open while online. The screen stays on so ride requests and your location keep updating.</p>
     </div>
@@ -242,7 +253,7 @@
   </header>
   <nav class="tabs" id="adminTabs">
     <button data-tab="dash" class="on">Dashboard</button><button data-tab="sos">SOS</button><button data-tab="riders">Riders</button>
-    <button data-tab="rides">Rides</button><button data-tab="users">Users</button><button data-tab="fares">Fares</button><button data-tab="settings">Settings</button>
+    <button data-tab="rides">Rides</button><button data-tab="users">Users</button><button data-tab="payments">Payments</button><button data-tab="fares">Fares</button><button data-tab="settings">Settings</button>
   </nav>
   <div class="admincontent" id="adminContent"></div>
 </section>
