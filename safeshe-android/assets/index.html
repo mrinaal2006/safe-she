@@ -282,6 +282,7 @@
         <div class="between"><div><small class="muted">Due to SafeShe (fees + passes)</small><b id="duesAmt">₹0</b></div>
           <button class="primary small" id="btnPayUpi">Pay via UPI</button></div>
         <p class="muted small" id="duesInfo"></p>
+        <div id="duesAlt"></div>
         <div id="utrForm" hidden>
           <label class="small muted" for="utrInput">After paying, enter the UPI reference (UTR / UPI Ref No.) from your UPI app</label>
           <div class="filters"><input id="utrInput" type="text" inputmode="numeric" maxlength="35" placeholder="e.g. 412345678901"><input id="utrAmt" type="number" min="1" step="1" style="max-width:110px" placeholder="₹"></div>
@@ -415,6 +416,7 @@
       <div class="qrbox" id="shareQr"></div>
       <p class="small center" id="shareUpi"></p>
       <button class="primary wide" id="btnSharePay">Pay with UPI app</button>
+      <div id="shareAlt"></div>
       <label class="small muted" for="shareUtr">After paying, enter the UPI reference (UTR / UPI Ref No.)</label>
       <input id="shareUtr" type="text" inputmode="numeric" maxlength="35" placeholder="e.g. 412345678901">
       <button class="ghost wide" id="btnShareSubmit">Submit payment</button>

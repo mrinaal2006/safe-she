@@ -48,7 +48,7 @@ import java.util.Locale;
  */
 public class MainActivity extends Activity {
 
-    static final class BuildInfo { static final String VERSION = "4.5"; }
+    static final class BuildInfo { static final String VERSION = "4.6"; }
 
     private static final int REQ_AUDIO = 1;
     private static final int REQ_LOCATION = 2;
@@ -355,23 +355,26 @@ public class MainActivity extends Activity {
                 ContentValues v = new ContentValues();
                 v.put("_display_name", name);
                 v.put("mime_type", mime);
-                v.put("relative_path", Environment.DIRECTORY_DOWNLOADS + "/SafeShe");
-                Uri uri = cr.insert(Uri.parse("content://media/external/downloads"), v);
+                // Images (e.g. a UPI QR code) go to Pictures/SafeShe so they show in the gallery ("Scan from gallery").
+                boolean img = mime.startsWith("image/");
+                v.put("relative_path", (img ? Environment.DIRECTORY_PICTURES : Environment.DIRECTORY_DOWNLOADS) + "/SafeShe");
+                Uri uri = cr.insert(Uri.parse(img ? "content://media/external/images/media" : "content://media/external/downloads"), v);
                 if (uri == null) throw new IllegalStateException("MediaStore refused the file");
                 copy(new java.io.ByteArrayInputStream(data), cr.openOutputStream(uri));
-                where = "Downloads/SafeShe/" + name;
+                where = (img ? "Pictures" : "Downloads") + "/SafeShe/" + name;
             } else {
                 if (!has(Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
                     pendingFile = data; pendingFileName = name; pendingFileMime = mime;
                     requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQ_STORAGE);
                     return;
                 }
-                File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "SafeShe");
+                String top = mime.startsWith("image/") ? Environment.DIRECTORY_PICTURES : Environment.DIRECTORY_DOWNLOADS;
+                File dir = new File(Environment.getExternalStoragePublicDirectory(top), "SafeShe");
                 if (!dir.exists() && !dir.mkdirs()) throw new IllegalStateException("Cannot create folder");
                 File dest = new File(dir, name);
                 copy(new java.io.ByteArrayInputStream(data), new FileOutputStream(dest));
                 MediaScannerConnection.scanFile(this, new String[]{dest.getAbsolutePath()}, new String[]{mime}, null);
-                where = "Downloads/SafeShe/" + name;
+                where = top + "/SafeShe/" + name;
             }
             emit("fileSaved", obj("ok", true, "name", name, "message", "Saved to " + where));
         } catch (Exception e) {
@@ -593,6 +596,14 @@ public class MainActivity extends Activity {
                     catch (ActivityNotFoundException e) { emit("toast", obj("message", "No phone app found. Dial " + number + " manually.")); }
                 }
             });
+        }
+
+        /** Copy text (e.g. a UPI ID) to the clipboard. */
+        @JavascriptInterface public void copyText(final String text) {
+            ui.post(new Runnable() { public void run() {
+                android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm != null) cm.setPrimaryClip(android.content.ClipData.newPlainText("UPI ID", text == null ? "" : text));
+            } });
         }
 
         @JavascriptInterface public void openUrl(final String url) {

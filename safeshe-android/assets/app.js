@@ -713,6 +713,45 @@
     catch (e) { box.appendChild(el("p", { class: "muted small", text: "QR code unavailable" })); }
     return box;
   }
+  /** QR code as a PNG (white background, label underneath) so it can be saved to the gallery. */
+  function qrPngDataUrl(text, label) {
+    var q = qrcode(0, "M"); q.addData(text); q.make();
+    var n = q.getModuleCount(), cell = 10, pad = 40, size = n * cell + pad * 2, extra = label ? 70 : 0;
+    var cv = document.createElement("canvas"); cv.width = size; cv.height = size + extra;
+    var g = cv.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, cv.width, cv.height); g.fillStyle = "#000";
+    for (var r = 0; r < n; r++) for (var c = 0; c < n; c++) if (q.isDark(r, c)) g.fillRect(pad + c * cell, pad + r * cell, cell, cell);
+    if (label) { g.font = "bold 26px sans-serif"; g.textAlign = "center"; g.fillText(label, size / 2, size + 30, size - 20); }
+    return cv.toDataURL("image/png");
+  }
+  function copyText(t) {
+    if (A && A.copyText) { A.copyText(t); return Promise.resolve(); }
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(t);
+    var i = el("textarea", { value: t }); i.value = t; document.body.appendChild(i); i.select();
+    try { document.execCommand("copy"); } finally { i.remove(); }
+    return Promise.resolve();
+  }
+  /**
+   * Other ways to pay when a UPI app declines the "Pay with UPI app" button ("declined for security reasons"):
+   * GPay/PhonePe often block payment links opened by another app when the receiver is a personal UPI ID.
+   * Paying to the copied UPI ID, or scanning the saved QR from the gallery, works.
+   */
+  function upiAlt(vpa, name, amount, note) {
+    var box = el("div", { class: "upialt" });
+    box.appendChild(el("div", { class: "upialt-btns" },
+      el("button", { class: "ghost small", text: "📋 Copy UPI ID", onclick: function () {
+        copyText(vpa).then(function () { toast("UPI ID copied: " + vpa + ". Open your UPI app → Pay UPI ID / number → paste → " + rupees2(amount), 6000); })
+          .catch(function () { toast("UPI ID: " + vpa, 6000); });
+      } }),
+      el("button", { class: "ghost small", text: "🖼️ Save QR to gallery", onclick: function () {
+        var file = "SafeShe-pay-" + String(vpa).replace(/[^A-Za-z0-9]/g, "_") + "-" + Math.round(amount) + ".png";
+        var url; try { url = qrPngDataUrl(upiLink(vpa, name, amount, note), "Pay " + rupees2(amount) + " to " + vpa); } catch (e) { toast("Could not make the QR image."); return; }
+        if (A && A.saveFile) { A.saveFile(url.split(",")[1], file, "image/png"); toast("Saving the QR… Then in your UPI app tap Scan → 🖼️ gallery and pick it.", 6000); return; }
+        var a = document.createElement("a"); a.href = url; a.download = file; document.body.appendChild(a); a.click(); a.remove();
+      } })));
+    box.appendChild(el("p", { class: "small muted", text: "Payment declined \"for security reasons\"? Your UPI app blocks pay links to personal UPI IDs. " +
+      "Copy the UPI ID and pay to it in the app (enter " + rupees2(amount) + "), or save the QR and use Scan → gallery." }));
+    return box;
+  }
   /** Passenger: pay the rider directly (UPI to the rider's own account, or cash). */
   function passengerPayCard(r) {
     var d = r.driver || {}, amt = r.fare, card = el("div", { class: "paycard" });
@@ -723,6 +762,7 @@
       card.appendChild(el("button", { class: "primary wide", text: "Pay " + rupees(amt) + " with UPI app", onclick: function () { openUrl(link); } }));
       card.appendChild(qrEl(link));
       card.appendChild(el("p", { class: "small center" }, "UPI ID: ", el("span", { class: "upiid", text: d.upiId })));
+      card.appendChild(upiAlt(d.upiId, d.name, amt, "SafeShe ride #" + r.id));
     } else if (r.payment === "upi") {
       card.appendChild(el("h3", { text: "Pay " + rupees(amt) + " to " + (d.name || "your rider") }));
       card.appendChild(el("p", { class: "small", text: "Ask your rider to show their UPI QR code, or pay in cash." }));
@@ -775,7 +815,9 @@
         $("shareQr").appendChild(qrEl(link).firstChild || el("span"));
         $("shareUpi").textContent = "Pay to " + d.upiId + " (" + d.payeeName + ")";
         $("btnSharePay").hidden = false; $("btnSharePay").onclick = function () { openUrl(link); toast("Complete the payment, then enter the UPI reference here.", 4500); };
+        $("shareAlt").innerHTML = ""; $("shareAlt").appendChild(upiAlt(d.upiId, d.payeeName, share, "SafeShe share ride #" + r.id));
       } else {
+        $("shareAlt").innerHTML = "";
         $("shareUpi").textContent = "The admin hasn't set a UPI ID yet. This amount is added to your SafeShe dues.";
         $("btnSharePay").hidden = true;
       }
@@ -972,6 +1014,8 @@
       box.classList.toggle("clear", d.toPay <= 0);
       $("duesAmt").textContent = rupees2(d.toPay);
       $("btnPayUpi").hidden = d.toPay <= 0 || !d.upiId;
+      $("duesAlt").innerHTML = "";
+      if (d.toPay > 0 && d.upiId) $("duesAlt").appendChild(upiAlt(d.upiId, d.payeeName, Math.ceil(d.toPay), "SafeShe commission " + (me ? me.phone : "")));
       var info = [];
       if (d.toPay <= 0) info.push("All clear. Thank you!");
       if (d.pending > 0) info.push(rupees2(d.pending) + " waiting for admin verification.");
@@ -1591,7 +1635,8 @@
         case "playStarted": playing = true; status("recStatus", "Playing…"); break;
         case "playStopped": playing = false; status("recStatus", "Playback stopped."); break;
         case "saveResult": status("recStatus", d.message, d.ok ? "good" : "bad"); toast(d.message); break;
-        case "fileSaved": toast((d.ok ? "✅ " : "⚠️ ") + d.message, 6000); if (reportStatus) reportStatus(d.message, d.ok); break;
+        case "fileSaved": toast((d.ok ? "✅ " : "⚠️ ") + d.message + (d.ok && /\.png$/i.test(d.name || "") ? ". In your UPI app: Scan → gallery → pick this image." : ""), 7000);
+          if (reportStatus && !/\.png$/i.test(d.name || "")) reportStatus(d.message, d.ok); break;
         case "location": resolveLoc(d); break;
         case "locError": if (sosOpen() && !sosLoc) renderSosLoc(d.message); resolveLoc(null, d.message); break;
         case "toast": toast(d.message); break;

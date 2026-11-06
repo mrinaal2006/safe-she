@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.safeshe.app"
-    android:versionCode="19"
-    android:versionName="4.5">
+    android:versionCode="20"
+    android:versionName="4.6">
 
     <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="34" />
 
@@ -10,7 +10,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Feature 1: voice recording -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <!-- Saving the recording to Downloads on Android 6-9 (Android 10+ uses MediaStore, no permission) -->
+    <!-- Saving the recording / QR code to Downloads or Pictures on Android 6-9 (Android 10+ uses MediaStore, no permission) -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <!-- Feature 3: emergency location sharing -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
