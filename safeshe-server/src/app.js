@@ -12,6 +12,7 @@ const sec = require('./security');
 const { createOtpService } = require('./otp');
 const { createGeo, haversineKm } = require('./geo');
 const pricingEngine = require('./pricing');
+const reports = require('./report');
 
 const ACTIVE = ['requested', 'accepted', 'arrived', 'started'];
 const VEHICLES = ['bike', 'auto', 'cab', 'pink'];
@@ -811,6 +812,20 @@ function createApp(cfg) {
     log('[admin] fares updated');
     res.json({ fares: await fares() });
   }));
+  // ---------------- admin: reports (7 days, 90 days or custom range, India time) as JSON preview or PDF
+  app.get('/api/admin/report', admin, wrap(async (req, res) => {
+    const range = reports.resolveRange(req.query);
+    res.json(await reports.buildReport(db, range));
+  }));
+  app.get('/api/admin/report.pdf', admin, wrap(async (req, res) => {
+    const range = reports.resolveRange(req.query);
+    const pdf = await reports.renderPdf(await reports.buildReport(db, range));
+    const name = `SafeShe-report-${range.from}-to-${range.to}.pdf`;
+    log(`[admin] report ${range.from}..${range.to} downloaded (${pdf.length} bytes)`);
+    res.set('Content-Type', 'application/pdf').set('Content-Disposition', `attachment; filename="${name}"`).set('X-Filename', name)
+      .set('Access-Control-Expose-Headers', 'X-Filename, Content-Disposition').send(pdf);
+  }));
+
   // ---------------- admin: service regions (reachable / not reachable)
   function regionInput(b) {
     const name = str(b.name, 60), state = str(b.state, 60);

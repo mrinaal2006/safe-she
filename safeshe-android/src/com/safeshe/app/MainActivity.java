@@ -48,7 +48,7 @@ import java.util.Locale;
  */
 public class MainActivity extends Activity {
 
-    static final class BuildInfo { static final String VERSION = "3.9"; }
+    static final class BuildInfo { static final String VERSION = "4.0"; }
 
     private static final int REQ_AUDIO = 1;
     private static final int REQ_LOCATION = 2;
@@ -199,7 +199,11 @@ public class MainActivity extends Activity {
             { fetchLocation(); if (watchWanted) startWatch(); }
             else emit("locError", obj("message", "Location permission was denied."));
         } else if (code == REQ_STORAGE) {
-            if (granted) saveRecording();
+            if (pendingFile != null) {
+                byte[] b = pendingFile; String n = pendingFileName, m = pendingFileMime; pendingFile = null;
+                if (granted) saveBytes(b, n, m);
+                else emit("fileSaved", obj("ok", false, "message", "Storage permission was denied."));
+            } else if (granted) saveRecording();
             else emit("saveResult", obj("ok", false, "message", "Storage permission was denied."));
         }
     }
@@ -335,6 +339,42 @@ public class MainActivity extends Activity {
             emit("saveResult", obj("ok", true, "message", "Saved to Downloads/SafeShe/" + name));
         } catch (Exception e) {
             emit("saveResult", obj("ok", false, "message", "Save failed: " + e.getMessage()));
+        }
+    }
+
+    // ---------------------------------------------------------------- save a file (e.g. admin PDF report) to Downloads/SafeShe
+    private byte[] pendingFile; private String pendingFileName, pendingFileMime;
+
+    private void saveBytes(byte[] data, String name, String mime) {
+        name = name.replaceAll("[^A-Za-z0-9._-]", "_");
+        try {
+            String where;
+            if (Build.VERSION.SDK_INT >= 29) {
+                ContentResolver cr = getContentResolver();
+                ContentValues v = new ContentValues();
+                v.put("_display_name", name);
+                v.put("mime_type", mime);
+                v.put("relative_path", Environment.DIRECTORY_DOWNLOADS + "/SafeShe");
+                Uri uri = cr.insert(Uri.parse("content://media/external/downloads"), v);
+                if (uri == null) throw new IllegalStateException("MediaStore refused the file");
+                copy(new java.io.ByteArrayInputStream(data), cr.openOutputStream(uri));
+                where = "Downloads/SafeShe/" + name;
+            } else {
+                if (!has(Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
+                    pendingFile = data; pendingFileName = name; pendingFileMime = mime;
+                    requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQ_STORAGE);
+                    return;
+                }
+                File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "SafeShe");
+                if (!dir.exists() && !dir.mkdirs()) throw new IllegalStateException("Cannot create folder");
+                File dest = new File(dir, name);
+                copy(new java.io.ByteArrayInputStream(data), new FileOutputStream(dest));
+                MediaScannerConnection.scanFile(this, new String[]{dest.getAbsolutePath()}, new String[]{mime}, null);
+                where = "Downloads/SafeShe/" + name;
+            }
+            emit("fileSaved", obj("ok", true, "name", name, "message", "Saved to " + where));
+        } catch (Exception e) {
+            emit("fileSaved", obj("ok", false, "message", "Could not save the file: " + e.getMessage()));
         }
     }
 
@@ -489,6 +529,13 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void play() { ui.post(new Runnable() { public void run() { MainActivity.this.play(); } }); }
         @JavascriptInterface public void stopPlayback() { ui.post(new Runnable() { public void run() { stopPlayerQuietly(); emit("playStopped", null); } }); }
         @JavascriptInterface public void saveRecording() { ui.post(new Runnable() { public void run() { MainActivity.this.saveRecording(); } }); }
+        /** Save a base64-encoded file (e.g. a PDF report) to Downloads/SafeShe. Result arrives as the "fileSaved" event. */
+        @JavascriptInterface public void saveFile(final String base64, final String name, final String mime) {
+            final byte[] data;
+            try { data = android.util.Base64.decode(base64, android.util.Base64.DEFAULT); }
+            catch (IllegalArgumentException e) { emit("fileSaved", obj("ok", false, "message", "The file data was invalid.")); return; }
+            ui.post(new Runnable() { public void run() { saveBytes(data, name, mime == null || mime.isEmpty() ? "application/octet-stream" : mime); } });
+        }
 
         @JavascriptInterface public void startWatch() { ui.post(new Runnable() { public void run() { MainActivity.this.startWatch(); } }); }
         @JavascriptInterface public void stopWatch() { ui.post(new Runnable() { public void run() { watchWanted = false; pauseWatch(); } }); }

@@ -12,6 +12,12 @@ as "Coming soon"), change its radius, or add a new region (with **Find** to look
 is detected from GPS, or they choose it with the 📍 region button. Destination search then shows places **inside that
 region**. A ride is accepted only when pickup and drop are both inside the same reachable region.
 
+**Reports (PDF):** Admin → **Reports**: choose **Last 7 days**, **Last 90 days** or **Custom dates** (up to 366 days),
+see a summary on screen, and tap **Download PDF report**. The PDF covers rides and completion rate, cancellations,
+fares, SafeShe earnings (platform fees, per-ride fees, passes), UPI payments, new passengers and riders, SOS alerts, and
+tables by vehicle type, region, day and top riders. Dates are India time. In the browser the PDF downloads normally; in the
+Android app it is saved to **Downloads/SafeShe/**.
+
 **Stay logged in:** after logging in once, the app stays logged in until **Log out**. Each use extends the login.
 With no internet, the app shows "No connection" and reconnects by itself without asking you to log in again.
 
@@ -25,7 +31,7 @@ or `TILE_URL` (raster) on the server.
 | `api/`, `vercel.json`, `package.json` | Vercel deployment from the repository root |
 | [`safeshe-server/`](safeshe-server/README.md) | Server code (Express + Postgres) and its tests |
 | [`safeshe-android/`](safeshe-android/README.md) | Android app (WebView app + native recording, location, SMS, dialling) |
-| `outputs/SafeShe-3.9.apk` | Latest signed APK. It asks for the server address on first launch. |
+| `outputs/SafeShe-4.0.apk` | Latest signed APK. It asks for the server address on first launch. |
 
 ## Deploy on Vercel
 1. **Import:** vercel.com → **Add New → Project** → import `safe-she`.
@@ -96,12 +102,12 @@ verification needs a payment gateway (e.g. Razorpay, Cashfree). Some UPI apps li
 a business/merchant UPI ID works best.
 
 ## Android app
-Install `outputs/SafeShe-3.9.apk` and enter `https://<project>.vercel.app` on first launch, or build it with the
+Install `outputs/SafeShe-4.0.apk` and enter `https://<project>.vercel.app` on first launch, or build it with the
 address built in: `SAFESHE_SERVER_URL=https://<project>.vercel.app ./safeshe-android/build.sh`.
 
 ## Develop / test
 ```bash
 npm install
 DATABASE_URL=postgres://… ADMIN_PASSWORD=… npm start      # http://localhost:8080
-TEST_DATABASE_URL=postgres://…/throwaway npm test          # 42 end-to-end checks (drops that DB's tables)
+TEST_DATABASE_URL=postgres://…/throwaway npm test          # 44 end-to-end checks (drops that DB's tables)
 ```

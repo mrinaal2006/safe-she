@@ -6,7 +6,8 @@
   "installCommand": "npm install --no-audit --no-fund --loglevel=error",
   "functions": {
     "api/index.js": {
-      "maxDuration": 30
+      "maxDuration": 30,
+      "includeFiles": "fonts/**"
     }
   },
   "rewrites": [

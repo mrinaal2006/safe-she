@@ -1132,6 +1132,38 @@
         open ? act("Mark resolved", "ok", function () { var n = prompt("Resolution note (what was done?)", ""); if (n === null) return; return api("POST", "/api/admin/sos/" + s.id + "/resolve", { note: n }).then(function () { adminTab(adminCur, true); }); }) : null));
   }
   var adminFilter = { riders: "pending", rides: "active", q: "", r: "" };
+
+  // ---------------- reports helpers (dates are India time)
+  var reportStatus = null;
+  function istToday() {
+    try { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
+    catch (e) { return new Date().toISOString().slice(0, 10); }
+  }
+  function addDaysYmd(ymd, n) { return new Date(Date.parse(ymd + "T12:00:00Z") + n * 86400000).toISOString().slice(0, 10); }
+  function fmtYmd(ymd) { return ymd ? new Date(Date.parse(ymd + "T12:00:00Z")).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }) : ""; }
+  /** Download the PDF: browser → normal file download; Android app → saved to Downloads/SafeShe via the native bridge. */
+  function downloadReport(query, label, done) {
+    if (done) done("Preparing the PDF for " + label + "…", true);
+    var h = {}; if (session && session.token) h.Authorization = "Bearer " + session.token;
+    return fetch(apiBase() + "/api/admin/report.pdf?" + query, { headers: h }).then(function (r) {
+      if (!r.ok) return r.json().catch(function () { return {}; }).then(function (j) { throw new Error(j.error || "Could not create the report (" + r.status + ")."); });
+      var name = r.headers.get("X-Filename") || ("SafeShe-report-" + istToday() + ".pdf");
+      return r.blob().then(function (b) { return { blob: b, name: name }; });
+    }).then(function (x) {
+      if (A && A.saveFile) {
+        return new Promise(function (res, rej) {
+          var fr = new FileReader();
+          fr.onload = function () { A.saveFile(String(fr.result).split(",")[1], x.name, "application/pdf"); if (done) done("Saving " + x.name + "…", true); res(); };
+          fr.onerror = function () { rej(new Error("Could not read the PDF.")); };
+          fr.readAsDataURL(x.blob);
+        });
+      }
+      var url = URL.createObjectURL(x.blob), a = document.createElement("a");
+      a.href = url; a.download = x.name; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+      if (done) done("Downloaded " + x.name + " (" + Math.round(x.blob.size / 1024) + " KB)", true);
+    }).catch(function (e) { if (done) done(e.message, false); throw e; });
+  }
   var ADMIN = {
     dash: function (c) {
       return Promise.all([api("GET", "/api/admin/stats"), api("GET", "/api/admin/sos?open=1"), api("GET", "/api/admin/rides?status=active")]).then(function (x) {
@@ -1198,6 +1230,50 @@
             }), act("📞 Call", "ghost", function () { dial(u.phone); })));
         })) : el("p", { class: "muted", text: "No users found." }));
       });
+    },
+    reports: function (c) {
+      c.innerHTML = "";
+      var today = istToday(), sel = adminFilter.report || { days: 7 };
+      var from = el("input", { type: "date", max: today, value: sel.from || addDaysYmd(today, -29) });
+      var to = el("input", { type: "date", max: today, value: sel.to || today });
+      var preview = el("div"), st = el("div", { class: "status" });
+      reportStatus = function (msg, ok) { st.textContent = msg; st.className = "status " + (ok ? "good" : "bad"); };
+      function q() { return sel.days ? "days=" + sel.days : "from=" + from.value + "&to=" + to.value; }
+      function label() { return sel.days ? "Last " + sel.days + " days" : fmtYmd(from.value) + " – " + fmtYmd(to.value); }
+      function pick(s) { sel = s; adminFilter.report = s; render(); }
+      var chips = el("div", { class: "filters" });
+      function render() {
+        chips.innerHTML = "";
+        [[{ days: 7 }, "Last 7 days"], [{ days: 90 }, "Last 90 days"], [{ custom: true }, "Custom dates"]].forEach(function (o) {
+          var on = o[0].days ? sel.days === o[0].days : !sel.days;
+          chips.appendChild(el("button", { class: "chip", style: on ? "background:#0f9d58;color:#fff;border-color:#0f9d58" : null, text: o[1],
+            onclick: function () { pick(o[0].days ? { days: o[0].days } : { from: from.value, to: to.value }); } }));
+        });
+        custom.hidden = !!sel.days;
+        loadPreview();
+      }
+      var custom = el("div", { class: "grid2" }, el("label", { class: "small muted" }, "From", from), el("label", { class: "small muted" }, "To", to));
+      [from, to].forEach(function (i) { i.addEventListener("change", function () { if (!sel.days) { sel = { from: from.value, to: to.value }; adminFilter.report = sel; loadPreview(); } }); });
+      var dl = act("⬇ Download PDF report", "primary", function () { return downloadReport(q(), label(), reportStatus); });
+      c.appendChild(el("section", { class: "card" }, el("h3", { text: "Download a report" }),
+        el("p", { class: "small muted", text: "PDF with rides, fares, SafeShe earnings (platform fees, per-ride fees, passes), payments, new users, SOS alerts, and breakdowns by vehicle, region, day and top riders. Dates are India time." }),
+        chips, custom, el("div", { style: "height:8px" }), dl, st));
+      c.appendChild(preview);
+      function loadPreview() {
+        if (!sel.days && (!from.value || !to.value)) return;
+        preview.innerHTML = ""; preview.appendChild(el("p", { class: "muted", text: "Loading summary…" }));
+        api("GET", "/api/admin/report?" + q()).then(function (r) {
+          var s = r.summary; preview.innerHTML = "";
+          function k(l, v) { return el("div", { class: "kpi" }, el("small", { text: l }), el("b", { text: v })); }
+          preview.appendChild(el("h3", { text: label() + " · " + r.range.days + " days" }));
+          preview.appendChild(el("div", { class: "kpis" },
+            k("Ride requests", s.requested), k("Completed", s.completed + " (" + s.completionRate + "%)"), k("Total fares", rupees2(s.gross)),
+            k("SafeShe earnings", rupees2(s.safeSheEarnings)), k("Platform fees", rupees2(s.platformFees)), k("Passes sold", s.passesSold + " · " + rupees2(s.passRevenue)),
+            k("Payments confirmed", rupees2(s.paymentsReceived)), k("New passengers / riders", s.newPassengers + " / " + s.newRiders), k("SOS alerts", s.sosTotal)));
+        }).catch(function (e) { preview.innerHTML = ""; preview.appendChild(el("p", { class: "status bad", text: e.message })); });
+      }
+      render();
+      return Promise.resolve();
     },
     regions: function (c) {
       return api("GET", "/api/admin/regions").then(function (r) {
@@ -1396,6 +1472,7 @@
         case "playStarted": playing = true; status("recStatus", "Playing…"); break;
         case "playStopped": playing = false; status("recStatus", "Playback stopped."); break;
         case "saveResult": status("recStatus", d.message, d.ok ? "good" : "bad"); toast(d.message); break;
+        case "fileSaved": toast((d.ok ? "✅ " : "⚠️ ") + d.message, 6000); if (reportStatus) reportStatus(d.message, d.ok); break;
         case "location": resolveLoc(d); break;
         case "locError": if (sosOpen() && !sosLoc) renderSosLoc(d.message); resolveLoc(null, d.message); break;
         case "toast": toast(d.message); break;

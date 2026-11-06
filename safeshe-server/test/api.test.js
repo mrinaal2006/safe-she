@@ -335,6 +335,32 @@ async function step(name, fn) {
     assert.equal((await api('POST', '/api/logout', {}, t2.token)).status, 200);
     assert.equal((await api('GET', '/api/me', null, t2.token)).status, 401, 'logout ends the session');
   });
+  await step('reports: 7-day / 90-day / custom JSON summary matches the data', async () => {
+    const r7 = await api('GET', '/api/admin/report?days=7', null, A.token);
+    assert.equal(r7.status, 200, r7.error); assert.equal(r7.range.days, 7); assert.equal(r7.daily.length, 7);
+    const hist = (await api('GET', '/api/rides/history', null, D.token)).rides.filter(x => x.status === 'completed');
+    assert.ok(r7.summary.completed >= hist.length, 'completed rides counted');
+    assert.equal(r7.summary.passesSold, 1); assert.equal(r7.summary.passRevenue, 15);
+    assert.equal(r7.summary.safeSheEarnings, Math.round((r7.summary.platformFees + r7.summary.rideFees + r7.summary.passRevenue) * 100) / 100);
+    assert.ok(r7.summary.sosTotal >= 1); assert.ok(r7.byVehicle.length >= 1); assert.ok(r7.byRegion.some(g => g.region === 'Bengaluru'));
+    assert.equal((await api('GET', '/api/admin/report?days=90', null, A.token)).range.days, 90);
+    const today = require('../src/report').todayIst();
+    const c = await api('GET', `/api/admin/report?from=${today}&to=${today}`, null, A.token);
+    assert.equal(c.range.days, 1); assert.equal(c.summary.requested, r7.daily[6].requested);
+  });
+  await step('reports: PDF download; bad ranges rejected; admin only', async () => {
+    const r = await fetch(base + '/api/admin/report.pdf?days=7', { headers: { Authorization: 'Bearer ' + A.token } });
+    assert.equal(r.status, 200); assert.equal(r.headers.get('content-type'), 'application/pdf');
+    assert.match(r.headers.get('x-filename'), /^SafeShe-report-\d{4}-\d{2}-\d{2}-to-\d{4}-\d{2}-\d{2}\.pdf$/);
+    const buf = Buffer.from(await r.arrayBuffer());
+    assert.equal(buf.subarray(0, 5).toString(), '%PDF-'); assert.ok(buf.length > 20000, 'pdf size ' + buf.length);
+    require('node:fs').writeFileSync(require('node:path').join(require('node:os').tmpdir(), 'safeshe-test-report.pdf'), buf);
+    assert.equal((await api('GET', '/api/admin/report?from=2026-05-10&to=2026-05-01', null, A.token)).status, 400, 'from after to');
+    assert.equal((await api('GET', '/api/admin/report?from=2024-01-01&to=2026-01-01', null, A.token)).status, 400, 'over 366 days');
+    assert.equal((await api('GET', '/api/admin/report?days=0', null, A.token)).status, 400);
+    assert.equal((await api('GET', '/api/admin/report?days=7', null, P.token)).status, 403, 'passengers cannot');
+    assert.equal((await fetch(base + '/api/admin/report.pdf?days=7')).status, 401, 'login required');
+  });
   await step('admin sees test-mode OTP codes', async () => { const o = await api('GET', '/api/admin/otps', null, A.token); assert.equal(o.testMode, true); assert.ok(o.codes.length >= 4); });
   await step('admin password change', async () => {
     assert.equal((await api('POST', '/api/admin/password', { current: 'test-admin-pass', next: 'new-pass-123' }, A.token)).status, 200);
