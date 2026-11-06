@@ -11,3 +11,5 @@ work/
 *.keystore
 *.pass
 .DS_Store
+public/
+.vercel/

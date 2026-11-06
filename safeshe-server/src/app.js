@@ -596,6 +596,15 @@ function createApp(cfg) {
     res.json({ fares: await fares() });
   }));
   app.get('/api/admin/otps', admin, wrap(async (req, res) => res.json({ testMode: otp.testMode, codes: await otp.recentTestCodes() })));
+  app.get('/api/admin/sms-status', admin, wrap(async (req, res) => res.json(await otp.smsStatus())));
+  app.post('/api/admin/sms-test', admin, wrap(async (req, res) => {
+    await rateLimit('smstest:' + req.s.admin.id, 5, 3600_000);
+    const phone = sec.normalizePhone(req.body.phone);
+    if (!phone) throw httpError(400, 'Enter a valid 10-digit Indian mobile number.');
+    await otp.sendTest(phone);
+    log(`[admin] test SMS sent to ${phone}`);
+    res.json({ ok: true, message: 'Test SMS sent to ' + phone + '. It should arrive within a minute.' });
+  }));
   app.post('/api/admin/password', admin, wrap(async (req, res) => {
     const a = await db.one('SELECT * FROM admins WHERE id = $1', [req.s.admin.id]);
     if (!sec.verifyPassword(String(req.body.current || ''), a.pass_hash)) throw httpError(400, 'Current password is wrong.');

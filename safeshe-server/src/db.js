@@ -115,19 +115,30 @@ function connectionString(env) {
 
 function createDb(env = process.env) {
   // Serverless functions run many small instances, so keep each pool small.
-  const pool = new pg.Pool({ connectionString: connectionString(env), max: +env.DB_POOL_MAX || 3, idleTimeoutMillis: 10000 });
-  pool.on('error', () => {}); // idle client errors (e.g. the provider closing connections) must not crash the function
+  // The pool is created on first use, so a missing DATABASE_URL gives a clear error message
+  // instead of crashing the whole function at startup.
+  let pool = null;
+  function getPool() {
+    if (!pool) {
+      const cs = connectionString(env); // throws a readable error if not configured
+      const needsSsl = /neon\.tech|supabase|render\.com|amazonaws|sslmode=require/.test(cs) && !/sslmode=disable/.test(cs);
+      pool = new pg.Pool({ connectionString: cs, max: +env.DB_POOL_MAX || 3, idleTimeoutMillis: 10000, connectionTimeoutMillis: 10000,
+        ssl: needsSsl ? { rejectUnauthorized: false } : undefined });
+      pool.on('error', () => {}); // idle client errors (e.g. the provider closing connections) must not crash the function
+    }
+    return pool;
+  }
   let ready = null;
   const db = {
-    pool,
-    async q(sql, params) { await db.ready(); return (await pool.query(sql, params)).rows; },
+    get pool() { return getPool(); },
+    async q(sql, params) { await db.ready(); return (await getPool().query(sql, params)).rows; },
     async one(sql, params) { return (await db.q(sql, params))[0] || null; },
-    async exec(sql, params) { await db.ready(); return (await pool.query(sql, params)).rowCount; },
+    async exec(sql, params) { await db.ready(); return (await getPool().query(sql, params)).rowCount; },
     ready() {
-      if (!ready) ready = pool.query(SCHEMA).catch(e => { ready = null; throw e; });
+      if (!ready) ready = Promise.resolve().then(() => getPool().query(SCHEMA)).catch(e => { ready = null; throw e; });
       return ready;
     },
-    close() { return pool.end(); },
+    close() { return pool ? pool.end() : Promise.resolve(); },
   };
   return db;
 }

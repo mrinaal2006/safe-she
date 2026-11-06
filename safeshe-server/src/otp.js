@@ -71,11 +71,30 @@ function createOtpService(db, cfg, log) {
     return true;
   }
 
+  /** SMS account status for the admin panel (2Factor balance), without exposing the key. */
+  async function smsStatus() {
+    if (testMode) return { provider: '2Factor.in', configured: false, message: 'TWOFACTOR_API_KEY is not set, so login codes are NOT sent by SMS (test mode).' };
+    try {
+      const r = await fetch(`https://2factor.in/API/V1/${encodeURIComponent(cfg.twoFactorKey)}/BAL/SMS`, { signal: AbortSignal.timeout(10000) });
+      const body = await r.json().catch(() => ({}));
+      if (body.Status === 'Success') return { provider: '2Factor.in', configured: true, ok: true, balance: body.Details, message: 'SMS sending is active. Balance: ' + body.Details + ' SMS.' };
+      return { provider: '2Factor.in', configured: true, ok: false, message: '2Factor rejected the API key: ' + (body.Details || 'HTTP ' + r.status) + '. Check TWOFACTOR_API_KEY.' };
+    } catch (e) {
+      return { provider: '2Factor.in', configured: true, ok: false, message: 'Could not reach 2Factor.in: ' + e.message };
+    }
+  }
+
+  /** Admin: send a one-off test SMS to check delivery (not a login code). */
+  async function sendTest(phone) {
+    if (testMode) throw err(400, 'Set TWOFACTOR_API_KEY first. Test mode does not send SMS.');
+    await deliver(phone, digits(6));
+  }
+
   async function recentTestCodes() {
     return testMode ? db.q('SELECT phone, code, at FROM otp_test_codes ORDER BY id DESC LIMIT 20') : [];
   }
 
-  return { send, verify, testMode, recentTestCodes };
+  return { send, verify, testMode, recentTestCodes, smsStatus, sendTest };
 }
 
 module.exports = { createOtpService };

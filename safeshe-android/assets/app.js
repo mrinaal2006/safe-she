@@ -998,10 +998,18 @@
       });
     },
     settings: function (c) {
-      return api("GET", "/api/admin/otps").then(function (r) {
+      return Promise.all([api("GET", "/api/admin/otps"), api("GET", "/api/admin/sms-status").catch(function (e) { return { message: e.message }; })]).then(function (x) {
+        var r = x[0], sms = x[1];
         c.innerHTML = "";
-        var box = el("section", { class: "card" }, el("h3", { text: "Login OTP delivery" }),
-          el("p", { class: "small", text: r.testMode ? "TEST MODE: no SMS provider configured. Codes are not sent by SMS. Recent codes are below. Set TWOFACTOR_API_KEY on the server to send real SMS via 2Factor.in." : "Live: OTPs are sent by SMS through 2Factor.in." }));
+        var box = el("section", { class: "card" }, el("h3", { text: "Login OTP delivery (SMS)" }),
+          el("p", { class: "small " + (sms.ok ? "" : "status bad"), text: (sms.ok ? "✅ " : "⚠️ ") + sms.message }),
+          r.testMode ? el("p", { class: "small muted", text: "To send real SMS: create an account at 2factor.in, copy your API key, add it as TWOFACTOR_API_KEY in Vercel → Settings → Environment Variables, then redeploy. Until then, recent login codes are listed below." }) : null);
+        if (!r.testMode) {
+          var tp = el("input", { type: "tel", inputmode: "numeric", maxlength: "10", placeholder: "10-digit mobile number" });
+          box.appendChild(el("div", { class: "filters" }, tp, act("Send test SMS", "primary", function () {
+            return api("POST", "/api/admin/sms-test", { phone: tp.value }).then(function (t) { toast(t.message, 5000); });
+          })));
+        }
         if (r.testMode) box.appendChild(r.codes.length ? el("div", { class: "list" }, r.codes.map(function (x) { return el("div", { class: "small", text: x.phone + " → " + x.code + " · " + when(x.at) }); })) : el("p", { class: "muted small", text: "No codes requested yet." }));
         c.appendChild(box);
         var cur = el("input", { type: "password", autocomplete: "current-password", placeholder: "Current password" });
