@@ -21,7 +21,7 @@ async function step(name, fn) {
   await wipe.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
   await wipe.end();
 
-  const cfg = loadConfig({ DATABASE_URL: DB, ADMIN_PASSWORD: 'test-admin-pass', OTP_SHOW_IN_APP: '1', QUIET: '1',
+  const cfg = loadConfig({ DATABASE_URL: DB, ADMIN_PASSWORD: 'test-admin-pass', ADMIN_EMAIL: 'Owner.Test@Example.com', OTP_SHOW_IN_APP: '1', QUIET: '1',
     NOMINATIM_URL: 'http://127.0.0.1:9', PHOTON_URL: 'http://127.0.0.1:9', OSRM_URL: 'http://127.0.0.1:9', SEARCH_TIMEOUT_SEC: '60' });
   const S = createApp(cfg);
   const server = http.createServer(S.app);
@@ -186,6 +186,16 @@ async function step(name, fn) {
   await step('admin password change', async () => {
     assert.equal((await api('POST', '/api/admin/password', { current: 'test-admin-pass', next: 'new-pass-123' }, A.token)).status, 200);
     assert.ok((await api('POST', '/api/admin/login', { username: 'Administrator', password: 'new-pass-123' })).token);
+  });
+  await step('admin email: set from ADMIN_EMAIL, login by email (any case), change in settings', async () => {
+    assert.equal((await api('GET', '/api/admin/me', null, A.token)).admin.email, 'owner.test@example.com');
+    assert.ok((await api('POST', '/api/admin/login', { username: 'OWNER.test@example.com', password: 'new-pass-123' })).token);
+    assert.equal((await api('POST', '/api/admin/login', { username: 'owner.test@example.com', password: 'wrong' })).status, 401);
+    assert.equal((await api('PUT', '/api/admin/email', { email: 'not-an-email' }, A.token)).status, 400);
+    assert.equal((await api('PUT', '/api/admin/email', { email: 'new.admin@gmail.com' }, A.token)).email, 'new.admin@gmail.com');
+    assert.ok((await api('POST', '/api/admin/login', { username: 'new.admin@gmail.com', password: 'new-pass-123' })).token);
+    assert.equal((await api('POST', '/api/admin/login', { username: 'owner.test@example.com', password: 'new-pass-123' })).status, 401, 'old email no longer works');
+    assert.equal((await api('PUT', '/api/admin/email', { email: 'x@y.com' }, P.token)).status, 403, 'passengers cannot change it');
   });
   await step('geo search fails gracefully when map services are unreachable', async () => {
     const r = await api('GET', '/api/geo/search?q=Koramangala', null, P.token);

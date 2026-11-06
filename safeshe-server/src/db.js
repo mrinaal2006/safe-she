@@ -37,6 +37,8 @@ const SCHEMA = `
     pass_hash TEXT NOT NULL,
     created_at BIGINT NOT NULL
   );
+  ALTER TABLE admins ADD COLUMN IF NOT EXISTS email TEXT;
+  CREATE UNIQUE INDEX IF NOT EXISTS admins_email ON admins (LOWER(email));
   CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,
     kind TEXT NOT NULL CHECK (kind IN ('user','admin')),

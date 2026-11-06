@@ -15,18 +15,20 @@ const { createGeo, haversineKm } = require('./geo');
 const ACTIVE = ['requested', 'accepted', 'arrived', 'started'];
 const VEHICLES = ['bike', 'auto', 'cab', 'pink'];
 const TICK_MS = 3000;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i;
 
 function loadConfig(env = process.env) {
   return {
     env,
     adminUser: env.ADMIN_USERNAME || 'Administrator',
     adminPassword: env.ADMIN_PASSWORD || '',
+    adminEmail: (env.ADMIN_EMAIL || '').trim().toLowerCase(),
     adminReset: env.ADMIN_RESET_PASSWORD === '1',
     twoFactorKey: env.TWOFACTOR_API_KEY || '',
     twoFactorTemplate: env.TWOFACTOR_TEMPLATE || '',
     showTestOtpInApp: env.OTP_SHOW_IN_APP === '1',
     publicUrl: (env.PUBLIC_URL || (env.VERCEL_PROJECT_PRODUCTION_URL ? 'https://' + env.VERCEL_PROJECT_PRODUCTION_URL : '')).replace(/\/$/, ''),
-    contactEmail: env.CONTACT_EMAIL || '',
+    contactEmail: env.CONTACT_EMAIL || (env.ADMIN_EMAIL || '').trim(),
     nominatimUrl: env.NOMINATIM_URL || 'https://nominatim.openstreetmap.org',
     photonUrl: env.PHOTON_URL || 'https://photon.komoot.io',
     osrmUrl: env.OSRM_URL || 'https://router.project-osrm.org',
@@ -63,6 +65,12 @@ function createApp(cfg) {
         } else if (cfg.adminReset) {
           await db.exec('UPDATE admins SET pass_hash = $1 WHERE id = $2', [sec.hashPassword(cfg.adminPassword), ex.id]);
           log(`[admin] password reset for "${cfg.adminUser}"`);
+        }
+        // ADMIN_EMAIL (optional) lets the admin log in with email instead of the username.
+        // It is applied when no email is set yet (or with ADMIN_RESET_PASSWORD=1); later changes happen in Admin → Settings.
+        if (cfg.adminEmail) {
+          if (!EMAIL_RE.test(cfg.adminEmail)) log(`[admin] WARNING: ADMIN_EMAIL "${cfg.adminEmail}" is not a valid email; ignored.`);
+          else await db.exec('UPDATE admins SET email = $1 WHERE username = $2 AND (email IS NULL OR $3)', [cfg.adminEmail, cfg.adminUser, cfg.adminReset]);
         }
       } else if (!(await db.one('SELECT COUNT(*) AS n FROM admins')).n) {
         log('[admin] WARNING: no admin account. Set ADMIN_PASSWORD (and optionally ADMIN_USERNAME) and redeploy.');
@@ -284,9 +292,11 @@ function createApp(cfg) {
   }));
   app.post('/api/admin/login', wrap(async (req, res) => {
     await rateLimit('adminlogin:' + ip(req), 10, 15 * 60_000);
-    const a = await db.one('SELECT * FROM admins WHERE username = $1', [str(req.body.username, 100)]);
-    if (!a || !sec.verifyPassword(String(req.body.password || ''), a.pass_hash)) { log(`[admin] failed login from ${ip(req)}`); throw httpError(401, 'Wrong username or password.'); }
-    res.json({ token: await issueSession('admin', a.id), admin: { id: a.id, username: a.username } });
+    // Log in with the username or the admin email.
+    const id = str(req.body.username, 200);
+    const a = await db.one('SELECT * FROM admins WHERE username = $1 OR (email IS NOT NULL AND LOWER(email) = LOWER($1)) LIMIT 1', [id]);
+    if (!a || !sec.verifyPassword(String(req.body.password || ''), a.pass_hash)) { log(`[admin] failed login from ${ip(req)}`); throw httpError(401, 'Wrong username/email or password.'); }
+    res.json({ token: await issueSession('admin', a.id), admin: { id: a.id, username: a.username, email: a.email } });
   }));
   app.post('/api/logout', wrap(async (req, res) => {
     const t = bearer(req); if (t) await db.exec('DELETE FROM sessions WHERE token_hash = $1', [sec.sha256(t)]);
@@ -604,6 +614,18 @@ function createApp(cfg) {
     await otp.sendTest(phone);
     log(`[admin] test SMS sent to ${phone}`);
     res.json({ ok: true, message: 'Test SMS sent to ' + phone + '. It should arrive within a minute.' });
+  }));
+  app.get('/api/admin/me', admin, wrap(async (req, res) => {
+    res.json({ admin: await db.one('SELECT id, username, email FROM admins WHERE id = $1', [req.s.admin.id]) });
+  }));
+  app.put('/api/admin/email', admin, wrap(async (req, res) => {
+    const email = str(req.body.email, 200).toLowerCase();
+    if (email && !EMAIL_RE.test(email)) throw httpError(400, 'Enter a valid email address, e.g. name@gmail.com.');
+    const clash = email && await db.one('SELECT id FROM admins WHERE LOWER(email) = $1 AND id <> $2', [email, req.s.admin.id]);
+    if (clash) throw httpError(409, 'Another admin already uses this email.');
+    await db.exec('UPDATE admins SET email = $1 WHERE id = $2', [email || null, req.s.admin.id]);
+    log(`[admin] admin ${req.s.admin.id} email ${email ? 'set' : 'removed'}`);
+    res.json({ ok: true, email: email || null });
   }));
   app.post('/api/admin/password', admin, wrap(async (req, res) => {
     const a = await db.one('SELECT * FROM admins WHERE id = $1', [req.s.admin.id]);

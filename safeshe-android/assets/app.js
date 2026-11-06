@@ -232,7 +232,7 @@
   $("otpInput").addEventListener("input", function () { if (digitsOnly(this.value).length === 6) verifyOtp(); });
   $("btnAdminDoLogin").onclick = function () {
     var u = $("adminUser").value.trim(), p = $("adminPass").value;
-    if (!u || !p) { status("loginStatus", "Enter username and password.", "bad"); return; }
+    if (!u || !p) { status("loginStatus", "Enter your username or email, and your password.", "bad"); return; }
     status("loginStatus", "Logging in…");
     api("POST", "/api/admin/login", { username: u, password: p }).then(function (r) {
       $("adminPass").value = ""; saveSession({ token: r.token, kind: "admin" }); status("loginStatus", ""); boot();
@@ -1012,6 +1012,13 @@
         }
         if (r.testMode) box.appendChild(r.codes.length ? el("div", { class: "list" }, r.codes.map(function (x) { return el("div", { class: "small", text: x.phone + " → " + x.code + " · " + when(x.at) }); })) : el("p", { class: "muted small", text: "No codes requested yet." }));
         c.appendChild(box);
+        var em = el("input", { type: "email", autocomplete: "email", placeholder: "admin email, e.g. name@gmail.com" });
+        api("GET", "/api/admin/me").then(function (m) { em.value = (m.admin && m.admin.email) || ""; }).catch(function () {});
+        c.appendChild(el("section", { class: "card" }, el("h3", { text: "Admin email" }),
+          el("p", { class: "small muted", text: "You can log in with this email instead of the username “Administrator”." }), em, el("div", { style: "height:8px" }),
+          act("Save email", "primary", function () {
+            return api("PUT", "/api/admin/email", { email: em.value.trim() }).then(function (r) { em.value = r.email || ""; toast(r.email ? "Admin email saved: " + r.email : "Admin email removed"); });
+          })));
         var cur = el("input", { type: "password", autocomplete: "current-password", placeholder: "Current password" });
         var nx = el("input", { type: "password", autocomplete: "new-password", placeholder: "New password (min 8 characters)" });
         c.appendChild(el("section", { class: "card" }, el("h3", { text: "Change admin password" }), cur, el("div", { style: "height:8px" }), nx, el("div", { style: "height:8px" }),
