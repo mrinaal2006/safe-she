@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.safeshe.app"
-    android:versionCode="22"
-    android:versionName="4.8">
+    android:versionCode="23"
+    android:versionName="4.9">
 
     <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="34" />
 
@@ -17,8 +17,6 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <!-- Feature 2: discreet vibration when the safety check appears -->
     <uses-permission android:name="android.permission.VIBRATE" />
-    <!-- Admin only, opt-in: read bank "money received" SMS to confirm riders' UPI payments automatically -->
-    <uses-permission android:name="android.permission.RECEIVE_SMS" />
 
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.location" android:required="false" />
@@ -50,9 +48,12 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Admin: share a bank "money received" SMS to SafeShe to confirm a rider's UPI payment (no SMS permission) -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
         </activity>
-        <receiver android:name=".BankSmsReceiver" android:exported="true" android:permission="android.permission.BROADCAST_SMS">
-            <intent-filter><action android:name="android.provider.Telephony.SMS_RECEIVED" /></intent-filter>
-        </receiver>
     </application>
 </manifest>

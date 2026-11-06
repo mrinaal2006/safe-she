@@ -146,7 +146,7 @@
     if (session.kind === "admin") {
       api("GET", "/api/admin/stats").then(function () {
         connectSocket(); showScreen("scr-admin"); adminTab(adminCur || "dash");
-        var bw = bankWatchState(); if (bw && bw.on) A.setBankWatch(apiBase(), session.token, true); // refresh the saved login
+        checkSharedSms();
       })
         .catch(function (e) { if (e.status !== 401) offlineRetry(e); });
       return;
@@ -178,7 +178,6 @@
   function forceLogout(msg) {
     if (driverOnline) setOnlineLocal(false);
     stopLive();
-    if (session && session.kind === "admin" && A && A.setBankWatch) { try { A.setBankWatch("", "", false); } catch (e) {} }
     saveSession(null); me = null; curRide = null; driverRide = null; role = null;
     if (msg) toast(msg, 4500);
     showScreen("scr-welcome");
@@ -1284,23 +1283,22 @@
   var adminCur = null, adminTimer = null;
   document.querySelectorAll("#adminTabs button").forEach(function (b) { b.onclick = function () { adminTab(b.dataset.tab); }; });
   $("btnAdminLogout").onclick = function () { if (confirm("Log out of the admin panel?")) logout(); };
-  function bankWatchState() {
-    if (!A || !A.getBankWatch) return null;
-    try { return JSON.parse(A.getBankWatch()); } catch (e) { return null; }
+  /** A bank SMS shared to SafeShe from the Messages app (long-press → Share → SafeShe): check it as the admin. */
+  function checkSharedSms() {
+    var t = A && A.takeSharedText ? A.takeSharedText() : "";
+    if (!t) return;
+    if (!session || session.kind !== "admin") { toast("Only the admin can check bank SMS. Log in as admin, then share the SMS again.", 6000); return; }
+    api("POST", "/api/admin/bank-alerts", { text: t, source: "share" }).then(function (x) {
+      if (!x.credit) { toast(x.message, 6000); return; }
+      toast(x.matchedPaymentId ? "✅ Matched and confirmed: " + rupees2(x.alert.amount) + " (UTR " + x.alert.utr + ")" : "Saved " + rupees2(x.alert.amount) + " (UTR " + x.alert.utr + "). It will be confirmed when a rider submits this UTR.", 7000);
+      showScreen("scr-admin"); adminTab("payments", true);
+    }).catch(function (e) { toast(e.message, 5000); });
   }
   /** Admin → Payments: confirm rider payments automatically from the admin's bank "money received" SMS. */
   function autoVerifyCard(alerts) {
     var card = el("section", { class: "card" }, el("h3", { text: "⚡ Automatic verification" }),
-      el("p", { class: "small muted", text: "When your bank sends a \"money received\" SMS, SafeShe reads the amount and UPI reference (UTR). A rider's payment with the same UTR and amount is confirmed automatically. Anything that doesn't match stays here for you to check." }));
-    var bw = bankWatchState();
-    if (bw) {
-      var sw = el("input", { type: "checkbox" }); sw.checked = !!bw.on;
-      sw.onchange = function () { A.setBankWatch(apiBase(), session.token, sw.checked); };
-      card.appendChild(el("label", { class: "check" }, sw, " Read bank SMS on this phone (the phone where your bank account's SMS arrive)"));
-      card.appendChild(el("p", { class: "small muted", text: "Only messages with \"credited/received\", an amount and a 12-digit UPI reference are sent to SafeShe; other SMS are ignored. Turn off any time." }));
-    } else {
-      card.appendChild(el("p", { class: "small", text: "📱 To make this automatic, log in as admin in the SafeShe Android app on the phone that receives your bank's SMS, open Payments and switch on \"Read bank SMS\". Or paste a bank SMS below." }));
-    }
+      el("p", { class: "small muted", text: "Share or paste your bank's \"money received\" SMS and SafeShe reads the amount and UPI reference (UTR). A rider's payment with the same UTR and amount is confirmed automatically. Anything that doesn't match stays here for you to check." }));
+    card.appendChild(el("p", { class: "small", text: "📱 On your phone: open the bank SMS in Messages → long-press it → Share → SafeShe (logged in as admin). Or paste it below." }));
     var ta = el("textarea", { rows: 3, placeholder: "Paste a bank \"credited\" SMS, e.g. Rs.90.00 credited to A/c XX1234 … UPI Ref 512345678901" });
     card.appendChild(ta);
     card.appendChild(act("Check this SMS", "ghost", function () {
@@ -1316,7 +1314,7 @@
         return el("div", { class: "item" },
           el("div", { class: "between" }, el("b", { text: rupees2(a.amount) + (a.vpa ? " from " + a.vpa : "") }),
             el("span", { class: "pill " + (a.paymentId ? "" : "amber"), text: a.paymentId ? "✓ " + (a.rider || "matched") : "no rider UTR yet" })),
-          el("div", { class: "small muted" }, "UTR ", el("span", { class: "upiid", text: a.utr }), " · " + (a.source === "sms" ? "bank SMS" : "pasted") + " · " + when(a.receivedAt)));
+          el("div", { class: "small muted" }, "UTR ", el("span", { class: "upiid", text: a.utr }), " · " + (a.source === "share" || a.source === "sms" ? "shared SMS" : "pasted") + " · " + when(a.receivedAt)));
       })));
     }
     return card;
@@ -1743,8 +1741,7 @@
         case "playStopped": playing = false; status("recStatus", "Playback stopped."); break;
         case "saveResult": status("recStatus", d.message, d.ok ? "good" : "bad"); toast(d.message); break;
         case "upiResult": onUpiResult(d); break;
-        case "bankWatch": if (d.message) toast(d.message, 7000); else toast(d.on ? "✅ Auto-verify is on for this phone" : "Auto-verify is off on this phone", 3500);
-          if (adminCur === "payments") adminTab("payments", true); break;
+        case "sharedText": checkSharedSms(); break;
         case "fileSaved": toast((d.ok ? "✅ " : "⚠️ ") + d.message + (d.ok && /\.png$/i.test(d.name || "") ? ". In your UPI app: Scan → gallery → pick this image." : ""), 7000);
           if (reportStatus && !/\.png$/i.test(d.name || "")) reportStatus(d.message, d.ok); break;
         case "location": resolveLoc(d); break;
