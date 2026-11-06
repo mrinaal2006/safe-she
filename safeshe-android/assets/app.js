@@ -276,14 +276,14 @@
   function openDriverProfile() {
     var d = me.driver || {};
     $("dpName").value = me.name || ""; $("dpGender").value = me.gender || "female";
-    $("dpModel").value = d.vehicleModel || ""; $("dpPlate").value = d.plate || ""; $("dpLicense").value = d.licenseNo || ""; $("dpEmergency").value = local10(me.emergencyPhone);
+    $("dpModel").value = d.vehicleModel || ""; $("dpPlate").value = d.plate || ""; $("dpLicense").value = d.licenseNo || ""; $("dpUpi").value = d.upiId || ""; $("dpEmergency").value = local10(me.emergencyPhone);
     dpVehicle = d.vehicleType || ""; document.querySelectorAll("#dpVehicle button").forEach(function (x) { x.classList.toggle("on", x.dataset.v === dpVehicle); });
     status("driverProfileStatus", ""); showScreen("scr-driver-profile");
   }
   $("btnDriverProfileSave").onclick = function () {
     if (!dpVehicle) { status("driverProfileStatus", "Choose your vehicle type.", "bad"); return; }
     api("PUT", "/api/me", { name: $("dpName").value, gender: $("dpGender").value, emergencyPhone: digitsOnly($("dpEmergency").value) })
-      .then(function () { return api("POST", "/api/driver/profile", { vehicleType: dpVehicle, vehicleModel: $("dpModel").value, plate: $("dpPlate").value, licenseNo: $("dpLicense").value }); })
+      .then(function () { return api("POST", "/api/driver/profile", { vehicleType: dpVehicle, vehicleModel: $("dpModel").value, plate: $("dpPlate").value, licenseNo: $("dpLicense").value, upiId: $("dpUpi").value.trim() }); })
       .then(function (r) { me = r.user; boot(); }).catch(function (e) { status("driverProfileStatus", e.message, "bad"); });
   };
   function showPending() {
@@ -307,6 +307,7 @@
     c.appendChild(el("p", { class: "muted small", text: me.phone + (me.gender ? " · " + me.gender : "") }));
     if (me.emergencyPhone) c.appendChild(el("p", { class: "small", text: "Emergency contact: " + me.emergencyPhone }));
     if (me.driver) c.appendChild(el("p", { class: "small", text: VEH_NAME[me.driver.vehicleType] + " · " + me.driver.vehicleModel + " · " + me.driver.plate + " · " + me.driver.status }));
+    if (me.driver) c.appendChild(el("p", { class: "small", text: me.driver.upiId ? "UPI ID for passenger payments: " + me.driver.upiId : "⚠️ Add your UPI ID (Edit my details) so passengers can pay you by UPI." }));
   }
   $("btnEditProfile").onclick = function () { if (me.role === "driver") openDriverProfile(); else openProfile(); };
   $("btnEditContact").onclick = function () { $("btnEditProfile").onclick(); };
@@ -670,6 +671,8 @@
       : r.status === "no_driver" ? "No rider accepted in time. Please try again in a few minutes, or choose another ride type."
       : "Cancelled by " + (r.cancelledBy === "passenger" ? "you" : r.cancelledBy === "driver" ? "the rider" : "SafeShe") + (r.cancelReason ? " · " + r.cancelReason : "");
     $("rateBox").hidden = !ok || !!r.rating;
+    var dp = $("donePay"); dp.innerHTML = "";
+    if (ok) dp.appendChild(passengerPayCard(r));
     var db = $("doneBreak"); db.innerHTML = "";
     if (ok && r.breakdown) db.appendChild(fareTable(r.breakdown, "Fare details"));
     renderStars(0);
@@ -695,6 +698,99 @@
     dropMarker = setLayer(dropMarker, null); driverMarker = setLayer(driverMarker, null); drawRoute(null);
     $("dropInput").value = ""; $("results").innerHTML = ""; renderSaved(); showView("pv-home");
     if (pickup) map.setView(pickup, 16);
+  }
+
+  // ============================================================ ride payments (UPI deep link + QR)
+  /** UPI payment link understood by GPay, PhonePe, Paytm, BHIM and other UPI apps. */
+  function upiLink(vpa, name, amount, note) {
+    return "upi://pay?pa=" + encodeURIComponent(vpa).replace(/%40/g, "@") + "&pn=" + encodeURIComponent(name || "SafeShe") +
+      (amount ? "&am=" + Number(amount).toFixed(2) : "") + "&cu=INR" + (note ? "&tn=" + encodeURIComponent(note) : "");
+  }
+  /** QR code (SVG) for any text, e.g. a UPI link that any UPI app can scan. */
+  function qrEl(text) {
+    var box = el("div", { class: "qrbox" });
+    try { var q = qrcode(0, "M"); q.addData(text); q.make(); box.innerHTML = q.createSvgTag({ cellSize: 6, margin: 2, scalable: true }); }
+    catch (e) { box.appendChild(el("p", { class: "muted small", text: "QR code unavailable" })); }
+    return box;
+  }
+  /** Passenger: pay the rider directly (UPI to the rider's own account, or cash). */
+  function passengerPayCard(r) {
+    var d = r.driver || {}, amt = r.fare, card = el("div", { class: "paycard" });
+    if (r.payment === "upi" && d.upiId) {
+      var link = upiLink(d.upiId, d.name, amt, "SafeShe ride #" + r.id);
+      card.appendChild(el("h3", { text: "Pay " + rupees(amt) + " to " + (d.name || "your rider") }));
+      card.appendChild(el("p", { class: "small muted", text: "The money goes straight to your rider's UPI account." }));
+      card.appendChild(el("button", { class: "primary wide", text: "Pay " + rupees(amt) + " with UPI app", onclick: function () { openUrl(link); } }));
+      card.appendChild(qrEl(link));
+      card.appendChild(el("p", { class: "small center" }, "UPI ID: ", el("span", { class: "upiid", text: d.upiId })));
+    } else if (r.payment === "upi") {
+      card.appendChild(el("h3", { text: "Pay " + rupees(amt) + " to " + (d.name || "your rider") }));
+      card.appendChild(el("p", { class: "small", text: "Ask your rider to show their UPI QR code, or pay in cash." }));
+    } else {
+      card.appendChild(el("h3", { text: "Pay " + rupees(amt) + " in cash" }));
+      card.appendChild(el("p", { class: "small", text: "Please pay " + rupees(amt) + " in cash to " + (d.name || "your rider") + "." }));
+    }
+    return card;
+  }
+  /** Rider, after completing a ride: 1) collect payment (own UPI QR or cash), 2) pay SafeShe's share to the admin's UPI ID. */
+  var settleRide = null;
+  function openSettle(r) {
+    settleRide = r; var upi = me && me.driver && me.driver.upiId;
+    $("settleStep1").hidden = false; $("settleStep2").hidden = true;
+    $("settleAmt").textContent = rupees(r.fare);
+    $("settleQr").innerHTML = ""; $("settleUpi").textContent = "";
+    if (r.payment === "upi" && upi) {
+      $("settleTitle").textContent = "Collect " + rupees(r.fare) + " by UPI";
+      $("settleSub").textContent = "Show this QR code to the passenger. They scan it with any UPI app and the money goes straight to your account.";
+      $("settleQr").appendChild(qrEl(upiLink(upi, me.name, r.fare, "SafeShe ride #" + r.id)).firstChild || el("span"));
+      $("settleUpi").textContent = "Your UPI ID: " + upi;
+    } else if (r.payment === "upi") {
+      $("settleTitle").textContent = "Collect " + rupees(r.fare);
+      $("settleSub").textContent = "Add your UPI ID in My account so passengers can pay you by UPI. For now, collect the fare in cash or from your own UPI app.";
+    } else {
+      $("settleTitle").textContent = "Collect " + rupees(r.fare) + " cash";
+      $("settleSub").textContent = "The passenger chose cash. Collect the fare before they leave.";
+    }
+    $("btnCollected").textContent = r.payment === "upi" ? "Payment received" : "Cash received";
+    $("settleModal").classList.add("show"); vibrate(200);
+  }
+  $("btnCollected").onclick = function () {
+    var r = settleRide; if (!r) return;
+    var btn = this; btn.disabled = true;
+    api("POST", "/api/rides/" + r.id + "/collected").then(function (x) { settleRide = x.ride; showShareStep(x.ride); })
+      .catch(function (e) { toast(e.message); }).then(function () { btn.disabled = false; });
+  };
+  function showShareStep(r) {
+    var share = r.safeSheShare || 0;
+    if (share <= 0) { closeSettle("Ride completed. You keep the full fare."); return; }
+    api("GET", "/api/driver/dues").then(function (d) {
+      $("settleStep1").hidden = true; $("settleStep2").hidden = false;
+      $("shareAmt").textContent = rupees2(share);
+      $("shareSub").textContent = "Platform fee " + rupees2(r.platformFee || 0) + (r.commission ? " + per-ride fee " + rupees2(r.commission) : "") +
+        ". You keep " + rupees2(r.driverKeeps != null ? r.driverKeeps - (r.commission || 0) : r.fare - share) + " from this ride.";
+      $("shareQr").innerHTML = ""; $("shareUtr").value = ""; status("shareStatus", "");
+      if (d.upiId) {
+        var link = upiLink(d.upiId, d.payeeName, share, "SafeShe share ride #" + r.id);
+        $("shareQr").appendChild(qrEl(link).firstChild || el("span"));
+        $("shareUpi").textContent = "Pay to " + d.upiId + " (" + d.payeeName + ")";
+        $("btnSharePay").hidden = false; $("btnSharePay").onclick = function () { openUrl(link); toast("Complete the payment, then enter the UPI reference here.", 4500); };
+      } else {
+        $("shareUpi").textContent = "The admin hasn't set a UPI ID yet. This amount is added to your SafeShe dues.";
+        $("btnSharePay").hidden = true;
+      }
+    }).catch(function () { closeSettle("Ride completed."); });
+  }
+  $("btnShareSubmit").onclick = function () {
+    var r = settleRide; if (!r) return; var btn = this; btn.disabled = true;
+    api("POST", "/api/driver/payments", { utr: $("shareUtr").value, amount: r.safeSheShare, rideId: r.id })
+      .then(function () { closeSettle("Thanks! Your payment of " + rupees2(r.safeSheShare) + " was sent for verification."); })
+      .catch(function (e) { status("shareStatus", e.message, "bad"); }).then(function () { btn.disabled = false; });
+  };
+  $("btnShareLater").onclick = function () { closeSettle("Added " + rupees2(settleRide ? settleRide.safeSheShare : 0) + " to your SafeShe dues. Pay it from your home screen."); };
+  function closeSettle(msg) {
+    $("settleModal").classList.remove("show"); settleRide = null;
+    if (msg) toast(msg, 5000);
+    refreshDriverStats();
   }
 
   // ============================================================ RIDER (driver)
@@ -805,7 +901,7 @@
     if (step === "start" && body.otp.length !== 4) { toast("Enter the passenger's 4-digit OTP."); return; }
     var btn = this; btn.disabled = true;
     api("POST", "/api/rides/" + r.id + "/" + step, body).then(function (x) {
-      if (step === "complete") { toast("Ride completed · " + (x.ride.payment === "upi" ? "UPI payment" : "collect " + rupees(x.ride.fare) + " cash") + (x.ride.commission ? " · SafeShe commission " + rupees2(x.ride.commission) : ""), 6000); endDriverRide(); }
+      if (step === "complete") { endDriverRide(); openSettle(x.ride); }
       else setDriverRide(x.ride);
     }).catch(function (e) { toast(e.message, 4000); }).then(function () { btn.disabled = false; });
   };
@@ -1459,6 +1555,7 @@
   function handleBack() {
     if ($("sosModal").classList.contains("show")) { $("sosModal").classList.remove("show"); return true; }
     if ($("regionModal").classList.contains("show")) { $("regionModal").classList.remove("show"); return true; }
+    if ($("settleModal").classList.contains("show")) return true; // rider must choose: received / submit / pay later
     if ($("drawer").classList.contains("show")) { openDrawer(false); return true; }
     if ([].some.call(document.querySelectorAll(".page"), function (p) { return !p.hidden; })) { closePages(); return true; }
     if (pickMode) { pickMode = null; sheet.style.transform = ""; return true; }

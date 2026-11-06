@@ -144,7 +144,7 @@ function createApp(cfg) {
     const out = { id: u.id, phone: u.phone, role: u.role, name: u.name, gender: u.gender, emergencyPhone: u.emergency_phone, createdAt: u.created_at };
     if (u.role === 'driver') {
       const d = await driverRow(u.id);
-      out.driver = d ? { vehicleType: d.vehicle_type, vehicleModel: d.vehicle_model, plate: d.plate, licenseNo: d.license_no, status: d.status, online: d.online,
+      out.driver = d ? { vehicleType: d.vehicle_type, vehicleModel: d.vehicle_model, plate: d.plate, licenseNo: d.license_no, status: d.status, online: d.online, upiId: d.upi_id || '',
         rating: d.rating_count ? +(d.rating_sum / d.rating_count).toFixed(2) : null, ratingCount: d.rating_count } : null;
     }
     return out;
@@ -212,7 +212,7 @@ function createApp(cfg) {
 
   const RIDE_SELECT = `SELECT r.*, p.name AS p_name, p.phone AS p_phone,
       du.name AS d_name, du.phone AS d_phone, du.gender AS d_gender,
-      d.vehicle_type AS d_vtype, d.vehicle_model AS d_model, d.plate AS d_plate, d.rating_sum AS d_rsum, d.rating_count AS d_rcount,
+      d.vehicle_type AS d_vtype, d.vehicle_model AS d_model, d.plate AS d_plate, d.rating_sum AS d_rsum, d.rating_count AS d_rcount, d.upi_id AS d_upi,
       d.lat AS d_lat, d.lng AS d_lng, d.loc_at AS d_loc_at
     FROM rides r JOIN users p ON p.id = r.passenger_id LEFT JOIN users du ON du.id = r.driver_id LEFT JOIN drivers d ON d.user_id = r.driver_id`;
   const getRide = id => db.one(RIDE_SELECT + ' WHERE r.id = $1', [id]);
@@ -228,11 +228,11 @@ function createApp(cfg) {
       drop: { lat: r.drop_lat, lng: r.drop_lng, name: r.drop_name },
       distanceKm: +r.distance_km.toFixed(2), durationMin: Math.round(r.duration_min), routeApprox: r.route_approx,
       requestedAt: r.requested_at, acceptedAt: r.accepted_at, arrivedAt: r.arrived_at, startedAt: r.started_at,
-      completedAt: r.completed_at, cancelledAt: r.cancelled_at, cancelledBy: r.cancelled_by, cancelReason: r.cancel_reason, rating: r.rating,
+      completedAt: r.completed_at, cancelledAt: r.cancelled_at, cancelledBy: r.cancelled_by, cancelReason: r.cancel_reason, rating: r.rating, collectedAt: r.collected_at || null,
       passenger: { id: r.passenger_id, name: r.p_name, phone: showPhone ? r.p_phone : undefined },
       driver: r.driver_id ? {
         id: r.driver_id, name: r.d_name, gender: r.d_gender, phone: showPhone ? r.d_phone : undefined,
-        vehicleType: r.d_vtype, vehicleModel: r.d_model, plate: r.d_plate,
+        vehicleType: r.d_vtype, vehicleModel: r.d_model, plate: r.d_plate, upiId: viewer === 'track' ? undefined : (r.d_upi || ''),
         rating: r.d_rcount ? +(r.d_rsum / r.d_rcount).toFixed(1) : null, lat: r.d_lat, lng: r.d_lng, locAt: r.d_loc_at,
       } : null,
     };
@@ -245,6 +245,8 @@ function createApp(cfg) {
     if (viewer === 'driver' || viewer === 'admin') {
       out.commission = r.commission || 0; out.tier = r.tier || null;
       out.driverKeeps = round2(r.fare - (r.platform_fee || 0)); // platform fee is passed to SafeShe; pickup surcharge stays 100% with the rider
+      // SafeShe's share of this ride (paid by the rider to the admin's UPI ID): platform fee + per-ride fee.
+      out.safeSheShare = r.status === 'completed' ? round2((r.platform_fee || 0) + (r.commission || 0)) : null;
     }
     return out;
   }
@@ -436,6 +438,9 @@ function createApp(cfg) {
     if (model.length < 2) throw httpError(400, 'Enter your vehicle model.');
     if (!/^[A-Z]{2}[ -]?\d{1,2}[ -]?[A-Z]{0,3}[ -]?\d{1,4}$/.test(plate)) throw httpError(400, 'Enter a valid number plate, e.g. KA 01 AB 1234.');
     if (lic.length < 6) throw httpError(400, 'Enter your driving licence number.');
+    // Rider's own UPI ID: passengers paying by UPI pay straight into this account.
+    const upiId = str(req.body.upiId, 300).replace(/\s+/g, '');
+    if (upiId && !UPI_RE.test(upiId)) throw httpError(400, 'Enter a valid UPI ID, e.g. yourname@okaxis or 9876543210@ybl.');
     const ex = await driverRow(req.user.id);
     if (ex) {
       // Changing vehicle details sends the rider back for approval.
@@ -443,8 +448,9 @@ function createApp(cfg) {
       await db.exec('UPDATE drivers SET vehicle_type=$1, vehicle_model=$2, plate=$3, license_no=$4, status=$5, online = CASE WHEN $6 THEN FALSE ELSE online END, updated_at=$7 WHERE user_id=$8',
         [vt, model, plate, lic, changed ? 'pending' : ex.status, changed, now(), req.user.id]);
       if (changed) await emit('admins', 'admin:driver_pending', { id: req.user.id });
+      await db.exec('UPDATE drivers SET upi_id = $1 WHERE user_id = $2', [upiId, req.user.id]); // UPI change needs no re-approval
     } else {
-      await db.exec('INSERT INTO drivers (user_id, vehicle_type, vehicle_model, plate, license_no, status, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7)', [req.user.id, vt, model, plate, lic, 'pending', now()]);
+      await db.exec('INSERT INTO drivers (user_id, vehicle_type, vehicle_model, plate, license_no, status, updated_at, upi_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)', [req.user.id, vt, model, plate, lic, 'pending', now(), upiId]);
       await emit('admins', 'admin:driver_pending', { id: req.user.id });
     }
     res.json({ user: await publicUser(await getUser(req.user.id)) });
@@ -625,6 +631,13 @@ function createApp(cfg) {
   app.post('/api/rides/:id/arrived', auth('driver'), wrap(async (req, res) => res.json({ ride: await driverStep(req, ['accepted'], 'arrived', 'arrived_at') })));
   app.post('/api/rides/:id/start', auth('driver'), wrap(async (req, res) => res.json({ ride: await driverStep(req, ['arrived', 'accepted'], 'started', 'started_at', true) })));
   app.post('/api/rides/:id/complete', auth('driver'), wrap(async (req, res) => res.json({ ride: await driverStep(req, ['started'], 'completed', 'completed_at') })));
+  // Rider confirms the passenger paid (UPI to the rider's account, or cash).
+  app.post('/api/rides/:id/collected', auth('driver'), wrap(async (req, res) => {
+    const ch = await db.exec("UPDATE rides SET collected_at = $1 WHERE id = $2 AND driver_id = $3 AND status = 'completed' AND collected_at IS NULL", [now(), +req.params.id || 0, req.user.id]);
+    if (!ch) { const r = await db.one('SELECT status, collected_at FROM rides WHERE id = $1 AND driver_id = $2', [+req.params.id || 0, req.user.id]); if (!r || r.status !== 'completed') throw httpError(404, 'Ride not found.'); }
+    await pushRide(+req.params.id);
+    res.json({ ride: rideView(await getRide(+req.params.id), 'driver'), dues: await duesFor(req.user.id) });
+  }));
 
   // ---------------- rider: commission dues and UPI payments to the admin
   app.get('/api/driver/dues', auth('driver'), wrap(async (req, res) => {
@@ -674,7 +687,12 @@ function createApp(cfg) {
     if (!amount) throw httpError(400, 'Enter the amount you paid.');
     if (!/^[A-Z0-9]{6,35}$/.test(utr)) throw httpError(400, 'Enter the UPI transaction reference (UTR / UPI Ref No.), usually 12 digits, from your UPI app.');
     if (await db.one('SELECT 1 AS x FROM commission_payments WHERE UPPER(utr) = $1', [utr])) throw httpError(409, 'This UPI reference was already submitted.');
-    const p = await db.one('INSERT INTO commission_payments (driver_id, amount, utr, created_at) VALUES ($1,$2,$3,$4) RETURNING id', [req.user.id, round2(amount), utr, now()]);
+    let rideId = null; // optional: SafeShe's share for one specific ride
+    if (req.body.rideId) {
+      const r = await db.one("SELECT id FROM rides WHERE id = $1 AND driver_id = $2 AND status = 'completed'", [+req.body.rideId || 0, req.user.id]);
+      if (!r) throw httpError(404, 'Ride not found.'); rideId = r.id;
+    }
+    const p = await db.one('INSERT INTO commission_payments (driver_id, amount, utr, created_at, ride_id) VALUES ($1,$2,$3,$4,$5) RETURNING id', [req.user.id, round2(amount), utr, now(), rideId]);
     log(`[payment ${p.id}] rider ${req.user.id} reported ₹${amount} (UTR ${utr})`);
     await emit('admins', 'admin:payment', { id: p.id, driverId: req.user.id, name: req.user.name, amount: round2(amount) });
     res.json({ ok: true, id: p.id, dues: await duesFor(req.user.id) });

@@ -163,6 +163,21 @@ async function step(name, fn) {
     assert.equal((await api('GET', '/api/rides/history', null, P.token)).rides[0].status, 'completed');
     assert.equal((await api('GET', '/api/rides/history', null, D.token)).rides[0].fare, ride.fare);
   });
+  await step('ride payments: rider UPI ID, passenger sees it, SafeShe share per ride, payment received', async () => {
+    const bad = await api('POST', '/api/driver/profile', { vehicleType: 'cab', vehicleModel: 'Tata Tigor EV', plate: 'KA 01 AB 1234', licenseNo: 'KA0120230001234', upiId: 'not-a-upi' }, D.token);
+    assert.equal(bad.status, 400);
+    const ok = await api('POST', '/api/driver/profile', { vehicleType: 'cab', vehicleModel: 'Tata Tigor EV', plate: 'KA 01 AB 1234', licenseNo: 'KA0120230001234', upiId: 'priya.rider@okaxis' }, D.token);
+    assert.equal(ok.status, 200, ok.error); assert.equal(ok.user.driver.upiId, 'priya.rider@okaxis'); assert.equal(ok.user.driver.status, 'approved', 'UPI change needs no re-approval');
+    const pr = (await api('GET', '/api/rides/history', null, P.token)).rides[0];
+    assert.equal(pr.driver.upiId, 'priya.rider@okaxis', 'passenger can pay the rider by UPI'); assert.equal(pr.safeSheShare, undefined);
+    const dr = (await api('GET', '/api/rides/history', null, D.token)).rides[0];
+    assert.equal(dr.safeSheShare, 3, 'share = platform fee (0 for Pink Cab) + ₹3 per-ride fee'); assert.equal(dr.collectedAt, null);
+    const col = await api('POST', `/api/rides/${dr.id}/collected`, {}, D.token);
+    assert.equal(col.status, 200, col.error); assert.ok(col.ride.collectedAt);
+    assert.equal((await api('POST', `/api/rides/${dr.id}/collected`, {}, P.token)).status, 403, 'only the rider');
+    assert.equal((await api('POST', '/api/driver/payments', { amount: 3, utr: '998877665544', rideId: 999999 }, D.token)).status, 404, 'payment must be for own ride');
+    const t = await api('GET', '/api/track/' + ride.shareToken); assert.equal(t.driver && t.driver.upiId, undefined, 'tracking link does not expose the UPI ID');
+  });
   await step('rider plan: pay-per-ride ₹3 tier fee (+ platform fee) charged on completion', async () => {
     const h = await api('GET', '/api/rides/history', null, D.token);
     assert.equal(h.rides[0].tier, 'perRide'); assert.equal(h.rides[0].commission, 3); assert.equal(h.rides[0].platformFee, 0, 'pink cab has no platform fee by default');

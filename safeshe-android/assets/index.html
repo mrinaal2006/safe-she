@@ -152,6 +152,8 @@
     <input id="dpPlate" type="text" maxlength="20" placeholder="KA 01 AB 1234" autocapitalize="characters">
     <label class="small muted" for="dpLicense">Driving licence number</label>
     <input id="dpLicense" type="text" maxlength="30" autocapitalize="characters">
+    <label class="small muted" for="dpUpi">Your UPI ID (passengers paying by UPI pay straight into this account)</label>
+    <input id="dpUpi" type="text" maxlength="100" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="e.g. 9876543210@ybl or yourname@okaxis">
     <label class="small muted" for="dpEmergency">Emergency contact (optional)</label>
     <div class="phonefield"><span>+91</span><input id="dpEmergency" type="tel" inputmode="numeric" maxlength="10"></div>
     <button class="primary wide" id="btnDriverProfileSave">Submit for approval</button>
@@ -250,6 +252,7 @@
       <h2 id="doneTitle">You've arrived 🎉</h2>
       <div class="fare"><span>Total fare</span><b id="doneFare"></b></div>
       <p class="muted" id="doneMeta"></p>
+      <div id="donePay"></div>
       <div id="doneBreak"></div>
       <div id="rateBox"><p>Rate your rider</p><div class="stars" id="stars"></div></div>
       <button class="primary wide" id="btnDone">Done</button>
@@ -394,6 +397,33 @@
   </div>
 </div>
 
+<!-- Rider: after completing a ride → 1) collect payment (own UPI QR or cash) → 2) pay SafeShe's share to the admin -->
+<div class="modal" id="settleModal" role="dialog" aria-modal="true" aria-labelledby="settleTitle">
+  <div class="msheet">
+    <div id="settleStep1">
+      <h3 id="settleTitle">Collect payment</h3>
+      <p class="muted small" id="settleSub"></p>
+      <div class="payamt" id="settleAmt"></div>
+      <div class="qrbox" id="settleQr"></div>
+      <p class="small center" id="settleUpi"></p>
+      <button class="ok wide big" id="btnCollected">Payment received</button>
+    </div>
+    <div id="settleStep2" hidden>
+      <h3>Pay SafeShe's share for this ride</h3>
+      <p class="muted small" id="shareSub"></p>
+      <div class="payamt" id="shareAmt"></div>
+      <div class="qrbox" id="shareQr"></div>
+      <p class="small center" id="shareUpi"></p>
+      <button class="primary wide" id="btnSharePay">Pay with UPI app</button>
+      <label class="small muted" for="shareUtr">After paying, enter the UPI reference (UTR / UPI Ref No.)</label>
+      <input id="shareUtr" type="text" inputmode="numeric" maxlength="35" placeholder="e.g. 412345678901">
+      <button class="ghost wide" id="btnShareSubmit">Submit payment</button>
+      <button class="link wide" id="btnShareLater">Pay later (added to your SafeShe dues)</button>
+      <div class="status" id="shareStatus"></div>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="regionModal" role="dialog" aria-modal="true" aria-labelledby="regionTitle">
   <div class="msheet">
     <div class="between"><h3 id="regionTitle">Choose your region</h3><button class="link" id="btnRegionClose">Close</button></div>
@@ -422,6 +452,7 @@
 <script src="vendor/leaflet/leaflet.js"></script>
 <script src="vendor/maplibre/maplibre-gl.js"></script>
 <script src="vendor/maplibre/leaflet-maplibre-gl.js"></script>
+<script src="vendor/qrcode/qrcode.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

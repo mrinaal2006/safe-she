@@ -89,6 +89,19 @@ If you registered your own DLT OTP template with 2Factor, set its name as `TWOFA
 Riders buy a pass from their home screen and it starts immediately. A ride counts under a pass if it was accepted while
 the pass was active. Riders keep the whole fare except the passenger's **platform fee**, which they pass on to SafeShe.
 
+## Ride payments (every ride)
+1. **Passenger pays the rider.** If the passenger chose **UPI**, the finished-ride screen shows **Pay ₹X to [rider]**: a
+   **Pay with UPI app** button and a **QR code** for the rider's own UPI ID, so the money goes straight to the rider's account.
+   If they chose **cash**, it says how much to pay in cash.
+2. **Rider collects.** After **Complete ride**, the rider sees their own **UPI QR code** with the exact fare (or "Collect ₹X
+   cash") and taps **Payment received**.
+3. **Rider pays SafeShe's share for that ride**: **platform fee + per-ride fee** (only the platform fee while a pass is
+   active). The screen shows the admin's **UPI QR code** and a **Pay with UPI app** button. The rider then enters the **UTR**,
+   and the admin confirms it in Admin → Payments. **Pay later** adds the amount to the rider's dues, and the dues limit
+   can stop riders going online until they pay.
+
+Riders add their **UPI ID** in rider registration or *My account → Edit my details*. Changing it doesn't need re-approval.
+
 ## Paying SafeShe (admin's UPI ID)
 What a rider owes = platform fees collected + Tier 1 per-ride fees + passes bought − confirmed payments.
 1. Admin → **Settings → Payments (UPI)**: enter your UPI ID (e.g. `yourname@okaxis`) and the payee name.
@@ -103,7 +116,7 @@ verification needs a payment gateway (e.g. Razorpay, Cashfree). Some UPI apps li
 a business/merchant UPI ID works best.
 
 ## Android app
-Install `outputs/SafeShe-4.3.apk`. It connects to **https://safe-she-one.vercel.app** automatically, with no server
+Install `outputs/SafeShe-4.4.apk`. It connects to **https://safe-she-one.vercel.app** automatically, with no server
 address to type. `./safeshe-android/build.sh` builds with that address by default. Set `SAFESHE_SERVER_URL=https://…`
 to build for another server.
 
@@ -118,5 +131,5 @@ or the admin.
 ```bash
 npm install
 DATABASE_URL=postgres://… ADMIN_PASSWORD=… npm start      # http://localhost:8080
-TEST_DATABASE_URL=postgres://…/throwaway npm test          # 45 end-to-end checks (drops that DB's tables)
+TEST_DATABASE_URL=postgres://…/throwaway npm test          # 46 end-to-end checks (drops that DB's tables)
 ```

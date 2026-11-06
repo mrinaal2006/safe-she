@@ -323,3 +323,11 @@ table.fares input { padding: 6px 8px; min-width: 60px; }
 @media (prefers-reduced-motion: reduce) {
   .splash.play *, .splash.play .splash-name span { animation-duration: .01s !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; }
 }
+/* ride payments: passenger pays rider (UPI QR / cash), rider pays SafeShe's share */
+.payamt { font-size: 34px; font-weight: 800; text-align: center; margin: 6px 0; }
+.qrbox { display: flex; justify-content: center; margin: 8px 0; }
+.qrbox svg { width: 210px; height: 210px; background: #fff; border-radius: 12px; padding: 8px; border: 1px solid var(--line); }
+.center { text-align: center; }
+.paycard { border: 1px solid #bfe3cc; background: var(--accent-soft); border-radius: 14px; padding: 12px; margin: 10px 0; }
+.paycard h3 { margin: 0 0 4px; }
+.paycard .qrbox svg { width: 170px; height: 170px; }
