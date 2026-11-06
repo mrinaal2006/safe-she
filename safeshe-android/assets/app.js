@@ -766,8 +766,9 @@
     api("GET", "/api/driver/dues").then(function (d) {
       $("settleStep1").hidden = true; $("settleStep2").hidden = false;
       $("shareAmt").textContent = rupees2(share);
-      $("shareSub").textContent = "Platform fee " + rupees2(r.platformFee || 0) + (r.commission ? " + per-ride fee " + rupees2(r.commission) : "") +
-        ". You keep " + rupees2(r.driverKeeps != null ? r.driverKeeps - (r.commission || 0) : r.fare - share) + " from this ride.";
+      $("shareSub").textContent = "Platform fee " + rupees2(r.platformFee || 0) + " + minimum " + rupees2(r.commission || 0) +
+        (r.tier && r.tier !== "perRide" ? " (minimum waived: pass active)" : "") +
+        ". You keep " + rupees2(r.fare - share) + " from this ride.";
       $("shareQr").innerHTML = ""; $("shareUtr").value = ""; status("shareStatus", "");
       if (d.upiId) {
         var link = upiLink(d.upiId, d.payeeName, share, "SafeShe share ride #" + r.id);
@@ -939,13 +940,14 @@
         $("planName").textContent = p.active.name + " · unlimited rides";
         $("planUntil").textContent = "until " + new Date(p.active.endsAt).toLocaleString("en-IN", { hour: "numeric", minute: "2-digit", day: "numeric", month: "short" });
         $("planUntil").hidden = false; $("planBuy").hidden = true;
-        $("planInfo").textContent = "No per-ride fee while your pass is active. You keep 100% of fares (only the passenger's platform fee goes to SafeShe).";
+        $("planInfo").textContent = "No minimum amount while your pass is active. Only the platform fee goes to SafeShe.";
       } else {
-        $("planName").textContent = t.perRide.name + " · " + rupees2(t.perRide.fee) + " per completed ride";
+        $("planName").textContent = t.perRide.name + " · SafeShe share per ride";
         $("planUntil").hidden = true; $("planBuy").hidden = false;
-        var r = p.today.rides, payPerRide = r * t.perRide.fee;
-        $("planInfo").textContent = "Doing many rides today? A pass costs at most " + rupees2(t.full.price) + " a day, whatever the number of rides." +
-          (r ? " Today so far: " + r + " ride" + (r > 1 ? "s" : "") + " = " + rupees2(payPerRide) + " in per-ride fees." : "");
+        var sh = (p.shares || []).map(function (x) { return (VEH_ICON[x.vehicle] || "") + " " + rupees2(x.platformFee + x.minimum); }).join(" · ");
+        $("planInfo").textContent = "Each ride: platform fee + minimum amount (set by SafeShe). " + sh +
+          ". Doing many rides? A pass removes the minimum amount for " + rupees2(t.full.price) + " a day." +
+          (p.today.rides ? " Today: " + p.today.rides + " ride" + (p.today.rides > 1 ? "s" : "") + " = " + rupees2(p.today.rideFees) + " in minimum amounts." : "");
       }
       syncSheet();
     }).catch(function () {});
@@ -1269,7 +1271,7 @@
         c.appendChild(el("div", { class: "kpis" },
           k("Open SOS alerts", s.openSos, s.openSos > 0), k("Active rides", s.activeRides), k("Riders online", s.ridersOnline), k("Riders pending approval", s.ridersPending, s.ridersPending > 0),
           k("Rides today", s.ridesToday), k("Completed today", s.completedToday), k("Revenue today", rupees(s.revenueToday)),
-          k("SafeShe earnings today", rupees2(s.commissionToday)), k("Platform fees today", rupees2(s.platformFeesToday)), k("Per-ride fees today", rupees2(s.rideFeesToday)),
+          k("SafeShe earnings today", rupees2(s.commissionToday)), k("Platform fees today", rupees2(s.platformFeesToday)), k("Minimum amounts today", rupees2(s.rideFeesToday)),
           k("Passes sold today", s.passesToday + " · " + rupees2(s.passRevenueToday)),
           k("Due from riders", rupees2(s.commissionDue)), k("Payments to verify", s.paymentsPending, s.paymentsPending > 0),
           k("Passengers", s.passengers), k("Riders", s.riders)));
@@ -1353,7 +1355,7 @@
       [from, to].forEach(function (i) { i.addEventListener("change", function () { if (!sel.days) { sel = { from: from.value, to: to.value }; adminFilter.report = sel; loadPreview(); } }); });
       var dl = act("⬇ Download PDF report", "primary", function () { return downloadReport(q(), label(), reportStatus); });
       c.appendChild(el("section", { class: "card" }, el("h3", { text: "Download a report" }),
-        el("p", { class: "small muted", text: "PDF with rides, fares, SafeShe earnings (platform fees, per-ride fees, passes), payments, new users, SOS alerts, and breakdowns by vehicle, region, day and top riders. Dates are India time." }),
+        el("p", { class: "small muted", text: "PDF with rides, fares, SafeShe earnings (platform fees, minimum amounts, passes), payments, new users, SOS alerts, and breakdowns by vehicle, region, day and top riders. Dates are India time." }),
         chips, custom, el("div", { style: "height:8px" }), dl, st));
       c.appendChild(preview);
       function loadPreview() {
@@ -1445,7 +1447,7 @@
     fares: function (c) {
       return api("GET", "/api/admin/fares").then(function (r) {
         c.innerHTML = "";
-        c.appendChild(el("p", { class: "muted small", text: "Upfront fare = Base fare (covers the first included km) + extra km × per-km rate + platform fee. The per-minute rate is charged only in gridlock. Night premium and long-pickup surcharge are set in Settings → Pricing. Changes apply to new bookings immediately." }));
+        c.appendChild(el("p", { class: "muted small", text: "Upfront fare = Base fare (covers the first included km) + extra km × per-km rate + platform fee. The per-minute rate is charged only in gridlock. SafeShe's share of every ride = Platform fee + Minimum (the rider pays it to your UPI ID after each ride; the minimum is waived while the rider has a pass). The fare is never below the Minimum. Night premium and long-pickup surcharge are set in Settings → Pricing. Changes apply to new bookings immediately." }));
         var inputs = [];
         var rows = r.fares.map(function (f) {
           var o = { vehicle: f.vehicle };
@@ -1455,7 +1457,7 @@
           return el("tr", null, el("td", { text: VEH_ICON[f.vehicle] }), cell("name", "text"), cell("base"), cell("included_km"), cell("per_km"), cell("per_min"), cell("platform_fee"), cell("min_fare"), el("td", null, chk));
         });
         c.appendChild(el("div", { class: "tablewrap" }, el("table", { class: "fares" },
-          el("tr", null, ["", "Name", "Base ₹", "Base covers km", "Per km ₹", "Per min ₹ (gridlock)", "Platform fee ₹", "Minimum ₹", "Active"].map(function (h) { return el("th", { text: h }); })), rows)));
+          el("tr", null, ["", "Name", "Base ₹", "Base covers km", "Per km ₹", "Per min ₹ (gridlock)", "Platform fee ₹", "Minimum ₹ (SafeShe share)", "Active"].map(function (h) { return el("th", { text: h }); })), rows)));
         c.appendChild(act("Save fares", "primary", function () {
           var body = { fares: inputs.map(function (o) { return { vehicle: o.vehicle, name: o.name.value, base: +o.base.value, included_km: +o.included_km.value, per_km: +o.per_km.value, per_min: +o.per_min.value, platform_fee: +o.platform_fee.value, min_fare: +o.min_fare.value, active: o.active.checked }; }) };
           return api("PUT", "/api/admin/fares", body).then(function () { toast("Fares saved"); });
@@ -1510,9 +1512,8 @@
           el("div", { class: "grid2" }, nf(function () { return pr.pickup; }, "freeKm", "Free pickup distance (km)", "0.5"), nf(function () { return pr.pickup; }, "perKm", "₹ per extra pickup km", "0.5")),
           el("p", { class: "small muted", text: "Gridlock trigger: the per-minute rate is charged only while the vehicle is slower than this speed for longer than this many minutes." }),
           el("div", { class: "grid2" }, nf(function () { return pr.gridlock; }, "speedKmh", "Speed below (km/h)"), nf(function () { return pr.gridlock; }, "minMinutes", "For more than (minutes)")),
-          el("p", { class: "small muted", text: "Rider plans (instead of a % commission)." }),
+          el("p", { class: "small muted", text: "Rider plans. Tier 1 (pay per ride) pays SafeShe's share on every ride = Platform fee + Minimum, set per vehicle in Admin → Fares. A pass waives the Minimum." }),
           el("div", { class: "grid2" },
-            nf(function () { return pr.tiers.perRide; }, "fee", "Tier 1 · ₹ per completed ride", "0.5"),
             nf(function () { return pr.tiers.half; }, "price", "Tier 2 · Half-Day Pass ₹"), nf(function () { return pr.tiers.half; }, "hours", "Half-Day Pass hours"),
             nf(function () { return pr.tiers.full; }, "price", "Tier 3 · Full-Day Pass ₹"), nf(function () { return pr.tiers.full; }, "hours", "Full-Day Pass hours")),
           act("Save pricing", "primary", function () {

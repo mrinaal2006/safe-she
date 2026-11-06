@@ -171,40 +171,40 @@ async function step(name, fn) {
     const pr = (await api('GET', '/api/rides/history', null, P.token)).rides[0];
     assert.equal(pr.driver.upiId, 'priya.rider@okaxis', 'passenger can pay the rider by UPI'); assert.equal(pr.safeSheShare, undefined);
     const dr = (await api('GET', '/api/rides/history', null, D.token)).rides[0];
-    assert.equal(dr.safeSheShare, 3, 'share = platform fee (0 for Pink Cab) + ₹3 per-ride fee'); assert.equal(dr.collectedAt, null);
+    assert.equal(dr.safeSheShare, 90, 'share = Fares platform fee (0 for Pink Cab) + Fares minimum (₹90)'); assert.equal(dr.collectedAt, null);
     const col = await api('POST', `/api/rides/${dr.id}/collected`, {}, D.token);
     assert.equal(col.status, 200, col.error); assert.ok(col.ride.collectedAt);
     assert.equal((await api('POST', `/api/rides/${dr.id}/collected`, {}, P.token)).status, 403, 'only the rider');
-    assert.equal((await api('POST', '/api/driver/payments', { amount: 3, utr: '998877665544', rideId: 999999 }, D.token)).status, 404, 'payment must be for own ride');
+    assert.equal((await api('POST', '/api/driver/payments', { amount: 90, utr: '998877665544', rideId: 999999 }, D.token)).status, 404, 'payment must be for own ride');
     const t = await api('GET', '/api/track/' + ride.shareToken); assert.equal(t.driver && t.driver.upiId, undefined, 'tracking link does not expose the UPI ID');
   });
-  await step('rider plan: pay-per-ride ₹3 tier fee (+ platform fee) charged on completion', async () => {
+  await step('rider plan: pay-per-ride share = Fares platform fee + Fares minimum, charged on completion', async () => {
     const h = await api('GET', '/api/rides/history', null, D.token);
-    assert.equal(h.rides[0].tier, 'perRide'); assert.equal(h.rides[0].commission, 3); assert.equal(h.rides[0].platformFee, 0, 'pink cab has no platform fee by default');
+    assert.equal(h.rides[0].tier, 'perRide'); assert.equal(h.rides[0].commission, 90); assert.equal(h.rides[0].platformFee, 0, 'pink cab has no platform fee by default');
     assert.equal((await api('GET', '/api/rides/history', null, P.token)).rides[0].commission, undefined, 'passengers do not see rider fees');
     const d = await api('GET', '/api/driver/dues', null, D.token);
-    assert.equal(d.charged, 3); assert.equal(d.rideFees, 3); assert.equal(d.due, 3); assert.equal(d.toPay, 3); assert.equal(d.upiId, '');
+    assert.equal(d.charged, 90); assert.equal(d.rideFees, 90); assert.equal(d.due, 90); assert.equal(d.toPay, 90); assert.equal(d.upiId, '');
   });
   await step('dues: admin UPI settings, dues limit blocks going online', async () => {
     assert.equal((await api('PUT', '/api/admin/payment-settings', { upiId: 'not a upi', payeeName: 'SafeShe' }, A.token)).status, 400);
     const s = await api('PUT', '/api/admin/payment-settings', { upiId: 'safeshe.admin@okaxis', payeeName: 'SafeShe Rides', duesLimit: 2 }, A.token);
     assert.equal(s.upiId, 'safeshe.admin@okaxis'); assert.equal(s.duesLimit, 2);
     const on = await api('POST', '/api/driver/online', { online: true, lat: 12.975, lng: 77.6 }, D.token);
-    assert.equal(on.status, 402); assert.match(on.error, /₹3/);
+    assert.equal(on.status, 402); assert.match(on.error, /₹90/);
     assert.equal((await api('PUT', '/api/admin/payment-settings', { upiId: 'x@y' }, P.token)).status, 403, 'only admin');
   });
   await step('dues: rider reports UPI payment → admin confirms → dues cleared', async () => {
-    assert.equal((await api('POST', '/api/driver/payments', { amount: 3, utr: '12' }, D.token)).status, 400, 'bad UTR');
-    const p = await api('POST', '/api/driver/payments', { amount: 3, utr: '4123 4567 8901' }, D.token);
-    assert.equal(p.status, 200, p.error); assert.equal(p.dues.pending, 3); assert.equal(p.dues.toPay, 0);
-    assert.equal((await api('POST', '/api/driver/payments', { amount: 3, utr: '412345678901' }, D.token)).status, 409, 'same UTR twice');
-    assert.equal((await waitFor(A.token, 'admin:payment')).amount, 3);
+    assert.equal((await api('POST', '/api/driver/payments', { amount: 90, utr: '12' }, D.token)).status, 400, 'bad UTR');
+    const p = await api('POST', '/api/driver/payments', { amount: 90, utr: '4123 4567 8901' }, D.token);
+    assert.equal(p.status, 200, p.error); assert.equal(p.dues.pending, 90); assert.equal(p.dues.toPay, 0);
+    assert.equal((await api('POST', '/api/driver/payments', { amount: 90, utr: '412345678901' }, D.token)).status, 409, 'same UTR twice');
+    assert.equal((await waitFor(A.token, 'admin:payment')).amount, 90);
     assert.equal((await api('POST', '/api/driver/online', { online: true, lat: 12.975, lng: 77.6 }, D.token)).status, 200, 'pending payment unblocks');
     const list = await api('GET', '/api/admin/payments?status=pending', null, A.token);
     assert.equal(list.payments.length, 1);
     assert.equal((await api('POST', `/api/admin/payments/${list.payments[0].id}/confirm`, {}, A.token)).status, 200);
     assert.equal((await waitFor(D.token, 'payment:update')).status, 'confirmed');
-    const d = await api('GET', '/api/driver/dues', null, D.token); assert.equal(d.paid, 3); assert.equal(d.due, 0);
+    const d = await api('GET', '/api/driver/dues', null, D.token); assert.equal(d.paid, 90); assert.equal(d.due, 0);
     assert.equal((await api('POST', `/api/admin/payments/${list.payments[0].id}/confirm`, {}, A.token)).status, 404, 'cannot confirm twice');
     await api('PUT', '/api/admin/payment-settings', { upiId: 'safeshe.admin@okaxis', payeeName: 'SafeShe Rides', duesLimit: 0 }, A.token);
   });
@@ -266,7 +266,7 @@ async function step(name, fn) {
   await step('rider tiers: half-day pass ₹15 → rides during the pass have no per-ride fee', async () => {
     const before = await api('GET', '/api/driver/dues', null, D.token);
     const plan0 = await api('GET', '/api/driver/plan', null, D.token);
-    assert.equal(plan0.current, 'perRide'); assert.equal(plan0.tiers.half.price, 15); assert.equal(plan0.tiers.full.price, 29); assert.equal(plan0.tiers.perRide.fee, 3);
+    assert.equal(plan0.current, 'perRide'); assert.equal(plan0.tiers.half.price, 15); assert.equal(plan0.tiers.full.price, 29); assert.equal(plan0.shares.find(x => x.vehicle === 'cab').minimum, 80);
     const buy = await api('POST', '/api/driver/pass', { kind: 'half' }, D.token);
     assert.equal(buy.status, 200, buy.error); assert.equal(buy.active.kind, 'half'); assert.ok(buy.active.endsAt - buy.active.startsAt === 6 * 3600e3);
     assert.equal((await api('POST', '/api/driver/pass', { kind: 'full' }, D.token)).status, 409, 'one pass at a time');
@@ -279,8 +279,11 @@ async function step(name, fn) {
   await step('admin: edit rate card (included km, platform fee) and pricing settings', async () => {
     const f = await api('GET', '/api/admin/fares', null, A.token);
     const bike = f.fares.find(x => x.vehicle === 'bike'); assert.equal(bike.base, 20); assert.equal(bike.included_km, 2); assert.equal(bike.platform_fee, 2);
-    bike.platform_fee = 1;
-    assert.equal((await api('PUT', '/api/admin/fares', { fares: [bike] }, A.token)).fares.find(x => x.vehicle === 'bike').platform_fee, 1);
+    bike.platform_fee = 1; bike.min_fare = 4;
+    const saved = (await api('PUT', '/api/admin/fares', { fares: [bike] }, A.token)).fares.find(x => x.vehicle === 'bike');
+    assert.equal(saved.platform_fee, 1); assert.equal(saved.min_fare, 4);
+    const sh = (await api('GET', '/api/driver/plan', null, D.token)).shares.find(x => x.vehicle === 'bike');
+    assert.equal(sh.platformFee + sh.minimum, 5, 'rider sees the share the admin set in Fares');
     const pr = await api('GET', '/api/admin/pricing', null, A.token); assert.equal(pr.night.multiplier, 1.25); assert.equal(pr.pickup.freeKm, 2.5);
     pr.tiers.full.price = 25;
     assert.equal((await api('PUT', '/api/admin/pricing', pr, A.token)).tiers.full.price, 25);

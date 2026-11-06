@@ -14,7 +14,7 @@ region**. A ride is accepted only when pickup and drop are both inside the same 
 
 **Reports (PDF):** Admin → **Reports**: choose **Last 7 days**, **Last 90 days** or **Custom dates** (up to 366 days),
 see a summary on screen, and tap **Download PDF report**. The PDF covers rides and completion rate, cancellations,
-fares, SafeShe earnings (platform fees, per-ride fees, passes), UPI payments, new passengers and riders, SOS alerts, and
+fares, SafeShe earnings (platform fees, minimum amounts, passes), UPI payments, new passengers and riders, SOS alerts, and
 tables by vehicle type, region, day and top riders. Dates are India time. In the browser the PDF downloads normally; in the
 Android app it is saved to **Downloads/SafeShe/**.
 
@@ -31,7 +31,7 @@ or `TILE_URL` (raster) on the server.
 | `api/`, `vercel.json`, `package.json` | Vercel deployment from the repository root |
 | [`safeshe-server/`](safeshe-server/README.md) | Server code (Express + Postgres) and its tests |
 | [`safeshe-android/`](safeshe-android/README.md) | Android app (WebView app + native recording, location, SMS, dialling) |
-| `outputs/SafeShe-4.0.apk` | Latest signed APK. It asks for the server address on first launch. |
+| `outputs/SafeShe-4.5.apk` | Latest signed APK. It connects to the built-in server address. |
 
 ## Deploy on Vercel
 1. **Import:** vercel.com → **Add New → Project** → import `safe-she`.
@@ -82,12 +82,12 @@ If you registered your own DLT OTP template with 2Factor, set its name as `TWOFA
 ## Rider plans (instead of a % commission)
 | Tier | Plan | Price |
 |---|---|---|
-| 1 · Casual | Pay per ride (default) | ₹3 per completed trip |
+| 1 · Casual | Pay per ride (default) | SafeShe's share on every ride: Platform fee + Minimum (Admin → Fares) |
 | 2 · Part-time | Half-Day Pass | ₹15 for 6 hours, unlimited rides |
 | 3 · Full-time | Full-Day Pass | ₹29 for 24 hours, unlimited rides |
 
 Riders buy a pass from their home screen and it starts immediately. A ride counts under a pass if it was accepted while
-the pass was active. Riders keep the whole fare except the passenger's **platform fee**, which they pass on to SafeShe.
+the pass was active, and then the Minimum is waived (only the platform fee is paid). Riders keep the whole fare except the passenger's **platform fee**, which they pass on to SafeShe.
 
 ## Ride payments (every ride)
 1. **Passenger pays the rider.** If the passenger chose **UPI**, the finished-ride screen shows **Pay ₹X to [rider]**: a
@@ -95,15 +95,17 @@ the pass was active. Riders keep the whole fare except the passenger's **platfor
    If they chose **cash**, it says how much to pay in cash.
 2. **Rider collects.** After **Complete ride**, the rider sees their own **UPI QR code** with the exact fare (or "Collect ₹X
    cash") and taps **Payment received**.
-3. **Rider pays SafeShe's share for that ride**: **platform fee + per-ride fee** (only the platform fee while a pass is
-   active). The screen shows the admin's **UPI QR code** and a **Pay with UPI app** button. The rider then enters the **UTR**,
-   and the admin confirms it in Admin → Payments. **Pay later** adds the amount to the rider's dues, and the dues limit
-   can stop riders going online until they pay.
+3. **Rider pays SafeShe's share for that ride.** The share uses only the two values the admin sets per vehicle in
+   **Admin → Fares**: **Platform fee ₹ + Minimum ₹ (SafeShe share)**. With the default rate card that is bike ₹2, auto ₹3,
+   cab ₹80 and Pink Cab ₹90. While a pass is active the Minimum is waived and only the platform fee is due. The fare is
+   never lower than the Minimum. The screen shows the admin's **UPI QR code** and a **Pay with UPI app** button. The rider
+   then enters the **UTR**, and the admin confirms it in Admin → Payments. **Pay later** adds the amount to the rider's
+   dues, and the dues limit can stop riders going online until they pay.
 
 Riders add their **UPI ID** in rider registration or *My account → Edit my details*. Changing it doesn't need re-approval.
 
 ## Paying SafeShe (admin's UPI ID)
-What a rider owes = platform fees collected + Tier 1 per-ride fees + passes bought − confirmed payments.
+What a rider owes = platform fees + Minimum amounts (Admin → Fares) + passes bought − confirmed payments.
 1. Admin → **Settings → Payments (UPI)**: enter your UPI ID (e.g. `yourname@okaxis`) and the payee name.
    Optionally set a **dues limit**: riders who owe more than this can't go online until they pay.
 2. The rider sees **"Due to SafeShe ₹X"** and taps **Pay via UPI**, which opens GPay/PhonePe/Paytm/BHIM with your UPI
@@ -116,7 +118,7 @@ verification needs a payment gateway (e.g. Razorpay, Cashfree). Some UPI apps li
 a business/merchant UPI ID works best.
 
 ## Android app
-Install `outputs/SafeShe-4.4.apk`. It connects to **https://safe-she-one.vercel.app** automatically, with no server
+Install `outputs/SafeShe-4.5.apk`. It connects to **https://safe-she-one.vercel.app** automatically, with no server
 address to type. `./safeshe-android/build.sh` builds with that address by default. Set `SAFESHE_SERVER_URL=https://…`
 to build for another server.
 

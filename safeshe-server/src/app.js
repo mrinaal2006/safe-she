@@ -187,7 +187,7 @@ function createApp(cfg) {
   /** The rider's pass covering time `at`, if any. */
   const activePass = (driverId, at) => db.one('SELECT * FROM driver_passes WHERE driver_id = $1 AND starts_at <= $2 AND ends_at > $2 ORDER BY ends_at DESC LIMIT 1', [driverId, at]);
 
-  // ---------------- what riders owe the admin: platform fees they collected + tier fees (per ride or passes)
+  // ---------------- what riders owe the admin: platform fees + Fares minimum amounts (rides.commission) + passes
   const UPI_RE = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,64}$/;
   async function paymentSettings() {
     const rows = await db.q("SELECT key, value FROM kv WHERE key IN ('pay_upi', 'pay_name', 'pay_limit')");
@@ -245,7 +245,8 @@ function createApp(cfg) {
     if (viewer === 'driver' || viewer === 'admin') {
       out.commission = r.commission || 0; out.tier = r.tier || null;
       out.driverKeeps = round2(r.fare - (r.platform_fee || 0)); // platform fee is passed to SafeShe; pickup surcharge stays 100% with the rider
-      // SafeShe's share of this ride (paid by the rider to the admin's UPI ID): platform fee + per-ride fee.
+      // SafeShe's share of this ride (paid by the rider to the admin's UPI ID): the admin's Fares values only,
+      // platform fee + minimum amount for this vehicle (commission holds the minimum amount, 0 while a pass is active).
       out.safeSheShare = r.status === 'completed' ? round2((r.platform_fee || 0) + (r.commission || 0)) : null;
     }
     return out;
@@ -611,7 +612,8 @@ function createApp(cfg) {
     if (!r || r.driver_id !== req.user.id) throw httpError(404, 'Ride not found.');
     if (!from.includes(r.status)) throw httpError(409, `Ride is ${r.status}.`);
     if (otpCheck && !sec.safeEqual(str(req.body.otp, 4), r.otp)) throw httpError(400, 'Wrong OTP. Ask the passenger for the 4-digit ride OTP.');
-    // On completion: final fare = upfront fare + long-pickup surcharge + gridlock minutes; tier fee for pay-per-ride riders.
+    // On completion: final fare = upfront fare + long-pickup surcharge + gridlock minutes.
+    // SafeShe's share = platform fee + the vehicle's "Minimum ₹" from Admin → Fares (minimum waived while a pass is active).
     let fare = r.fare, breakdown = r.breakdown, commission = r.commission || 0;
     if (to === 'completed') {
       const P = await pricing();
@@ -619,7 +621,7 @@ function createApp(cfg) {
       const trafficMin = round2(((r.gridlock && r.gridlock.sec) || 0) / 60);
       const bd = pricingEngine.computeFare(f, { km: r.distance_km, night: r.night, pickupSurcharge: r.pickup_surcharge || 0, trafficMin }, P);
       fare = bd.total; breakdown = bd;
-      commission = (r.tier || 'perRide') === 'perRide' ? P.tiers.perRide.fee : 0;
+      commission = (r.tier || 'perRide') === 'perRide' ? round2(Math.max(0, +f.min_fare || 0)) : 0;
     }
     const ch = await db.exec(`UPDATE rides SET status = $1, ${col} = $2, commission = $5, fare = $6, breakdown = $7 WHERE id = $3 AND status = ANY($4)`,
       [to, now(), r.id, from, commission, fare, breakdown ? JSON.stringify(breakdown) : null]);
@@ -658,7 +660,9 @@ function createApp(cfg) {
     const day = new Date(); day.setHours(0, 0, 0, 0);
     const today = await db.one(`SELECT COUNT(*) AS rides, COALESCE(SUM(fare - platform_fee), 0) AS kept, COALESCE(SUM(commission), 0) AS ride_fees
       FROM rides WHERE driver_id = $1 AND status = 'completed' AND completed_at >= $2`, [driverId, day.getTime()]);
-    return { tiers: P.tiers, active: pass ? { kind: pass.kind, name: P.tiers[pass.kind].name, price: pass.price, startsAt: pass.starts_at, endsAt: pass.ends_at } : null,
+    // SafeShe's share per ride comes only from Admin → Fares: platform fee + minimum amount, per vehicle.
+    const shares = (await fares()).filter(f => f.active).map(f => ({ vehicle: f.vehicle, name: f.name, platformFee: f.platform_fee || 0, minimum: f.min_fare || 0 }));
+    return { tiers: P.tiers, shares, active: pass ? { kind: pass.kind, name: P.tiers[pass.kind].name, price: pass.price, startsAt: pass.starts_at, endsAt: pass.ends_at } : null,
       current: pass ? pass.kind : 'perRide', today: { rides: today.rides, kept: round2(today.kept), rideFees: round2(today.ride_fees) } };
   }
   app.get('/api/driver/plan', auth('driver'), wrap(async (req, res) => res.json(await planView(req.user.id))));

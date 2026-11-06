@@ -187,7 +187,7 @@ const SCHEMA = `
     END IF;
   END $$;
   -- Ride payments: passengers pay the rider (rider's own UPI ID or cash); riders then pay SafeShe's share
-  -- (platform fee + per-ride fee) to the admin's UPI ID for that ride.
+  -- (platform fee + Fares minimum) to the admin's UPI ID for that ride.
   ALTER TABLE drivers ADD COLUMN IF NOT EXISTS upi_id TEXT NOT NULL DEFAULT '';
   ALTER TABLE rides ADD COLUMN IF NOT EXISTS collected_at BIGINT;
   ALTER TABLE commission_payments ADD COLUMN IF NOT EXISTS ride_id BIGINT;

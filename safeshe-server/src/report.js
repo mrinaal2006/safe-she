@@ -220,7 +220,7 @@ function renderPdf(data) {
     ]);
     heading('SafeShe earnings');
     cards([
-      { label: 'Total SafeShe earnings', value: rs(s.safeSheEarnings) }, { label: 'Platform fees', value: rs(s.platformFees) }, { label: 'Per-ride fees (Tier 1)', value: rs(s.rideFees) },
+      { label: 'Total SafeShe earnings', value: rs(s.safeSheEarnings) }, { label: 'Platform fees', value: rs(s.platformFees) }, { label: 'Minimum amounts (Fares)', value: rs(s.rideFees) },
       { label: 'Passes sold (half / full)', value: `${s.passesSold} (${s.halfPasses} / ${s.fullPasses})` }, { label: 'Pass revenue', value: rs(s.passRevenue) }, { label: 'Riders kept (fares − platform fees)', value: rs(s.riderEarnings) },
       { label: 'UPI payments confirmed', value: `${rs(s.paymentsReceived)} (${s.paymentsReceivedCount})` }, { label: 'Payments waiting to verify (now)', value: `${rs(s.paymentsPending)} (${s.paymentsPendingCount})`, alert: s.paymentsPendingCount > 0 }, { label: 'Long-pickup surcharges (to riders)', value: rs(s.pickupSurcharges) },
     ]);
@@ -253,7 +253,7 @@ function renderPdf(data) {
       data.sos.map(a => [fmtTs(a.at), a.name, a.phone, a.role, a.rideId ? '#' + a.rideId : '–', a.resolved ? 'Resolved' : 'OPEN']), { empty: 'No SOS alerts in this period.' });
 
     ensure(40); doc.moveDown(1);
-    doc.fill(MUTED).fontSize(7.5).text('Rides are counted by the time they were requested (India time). SafeShe earnings = platform fees + per-ride fees + passes sold. ' +
+    doc.fill(MUTED).fontSize(7.5).text('Rides are counted by the time they were requested (India time). SafeShe earnings = platform fees + minimum amounts (Admin → Fares) + passes sold. ' +
       'Riders keep each fare minus the platform fee; long-pickup surcharges go 100% to riders. Payments are UPI payments confirmed by the admin in this period.', X, doc.y, { width: W });
 
     // footer on every page
