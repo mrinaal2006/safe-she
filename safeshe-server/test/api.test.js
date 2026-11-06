@@ -208,6 +208,30 @@ async function step(name, fn) {
     assert.equal((await api('POST', `/api/admin/payments/${list.payments[0].id}/confirm`, {}, A.token)).status, 404, 'cannot confirm twice');
     await api('PUT', '/api/admin/payment-settings', { upiId: 'safeshe.admin@okaxis', payeeName: 'SafeShe Rides', duesLimit: 0 }, A.token);
   });
+  await step('auto-verify: bank "money received" SMS confirms the matching rider payment (either order)', async () => {
+    // rider first, then the admin's bank SMS arrives
+    const p1 = await api('POST', '/api/driver/payments', { amount: 12, utr: '600000000001' }, D.token);
+    assert.equal(p1.autoVerified, false);
+    const a1 = await api('POST', '/api/admin/bank-alerts', { text: 'Rs. 12.00 credited to HDFC Bank A/c XX1234 on 06-11-26 from VPA priya@okaxis (UPI 600000000001)', source: 'sms' }, A.token);
+    assert.equal(a1.credit, true); assert.equal(a1.matchedPaymentId, p1.id);
+    assert.equal((await waitFor(D.token, 'payment:update')).status, 'confirmed');
+    // bank SMS first, then the rider submits
+    const a2 = await api('POST', '/api/admin/bank-alerts', { text: 'Dear UPI user A/C X1234 credited by Rs.7.00 on 06Nov26 by priya@okaxis (Ref no 600000000002) -SBI' }, A.token);
+    assert.equal(a2.matchedPaymentId, null);
+    const p2 = await api('POST', '/api/driver/payments', { amount: 7, utr: '600000000002' }, D.token);
+    assert.equal(p2.autoVerified, true);
+    // wrong amount: stays pending for the admin; debit messages and other SMS are ignored
+    await api('POST', '/api/admin/bank-alerts', { text: 'INR 5.00 credited to A/c no. XX1234. Info- UPI/P2A/600000000003/PRIYA - Axis Bank' }, A.token);
+    const p3 = await api('POST', '/api/driver/payments', { amount: 50, utr: '600000000003' }, D.token);
+    assert.equal(p3.autoVerified, false, 'amount must match');
+    assert.equal((await api('POST', '/api/admin/bank-alerts', { text: 'Rs 9 debited from a/c XX12 to VPA x@ybl. UPI Ref 600000000004' }, A.token)).credit, false);
+    assert.equal((await api('POST', '/api/admin/bank-alerts', { text: 'credited Rs 9 UPI 600000000005' }, D.token)).status, 403, 'only admin');
+    const list = await api('GET', '/api/admin/bank-alerts', null, A.token);
+    assert.equal(list.alerts.length, 3); assert.ok(list.alerts.find(x => x.utr === '600000000001').rider);
+    const pend = await api('GET', '/api/admin/payments?status=pending', null, A.token);
+    assert.equal(pend.payments.length, 1); assert.equal(pend.payments[0].utr, '600000000003');
+    assert.equal((await api('POST', `/api/admin/payments/${pend.payments[0].id}/reject`, { note: 'test' }, A.token)).status, 200);
+  });
   await step('pricing engine: rate cards, night 1.25×, pickup surcharge, gridlock trigger (pure)', async () => {
     const PE = require('../src/pricing'), cfgP = PE.normalizePricing({});
     const bike = { base: 20, included_km: 2, per_km: 7, per_min: 0.5, platform_fee: 2, min_fare: 0 };

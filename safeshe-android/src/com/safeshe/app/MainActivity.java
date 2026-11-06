@@ -48,11 +48,12 @@ import java.util.Locale;
  */
 public class MainActivity extends Activity {
 
-    static final class BuildInfo { static final String VERSION = "4.6"; }
+    static final class BuildInfo { static final String VERSION = "4.7"; }
 
     private static final int REQ_AUDIO = 1;
     private static final int REQ_LOCATION = 2;
     private static final int REQ_STORAGE = 3;
+    private static final int REQ_SMS = 4;
     private static final long LOCATION_TIMEOUT_MS = 10000;
 
     private WebView web;
@@ -199,6 +200,9 @@ public class MainActivity extends Activity {
             if (has(Manifest.permission.ACCESS_COARSE_LOCATION) || has(Manifest.permission.ACCESS_FINE_LOCATION))
             { fetchLocation(); if (watchWanted) startWatch(); }
             else emit("locError", obj("message", "Location permission was denied."));
+        } else if (code == REQ_SMS) {
+            if (!granted) prefs.edit().putBoolean(BankSmsReceiver.PREF_ON, false).apply();
+            emit("bankWatch", bankWatchState(granted ? null : "SMS permission was denied. If Android says it is a restricted setting: App info → ⋮ → Allow restricted settings, then try again."));
         } else if (code == REQ_STORAGE) {
             if (pendingFile != null) {
                 byte[] b = pendingFile; String n = pendingFileName, m = pendingFileMime; pendingFile = null;
@@ -207,6 +211,20 @@ public class MainActivity extends Activity {
             } else if (granted) saveRecording();
             else emit("saveResult", obj("ok", false, "message", "Storage permission was denied."));
         }
+    }
+
+    // ---------------------------------------------------------------- admin: auto-verify UPI payments from bank SMS
+    private JSONObject bankWatchState(String message) {
+        boolean perm = has(Manifest.permission.RECEIVE_SMS);
+        return obj("on", prefs.getBoolean(BankSmsReceiver.PREF_ON, false) && perm, "permission", perm, "message", message);
+    }
+    private void setBankWatch(String server, String token, boolean on) {
+        SharedPreferences.Editor e = prefs.edit().putBoolean(BankSmsReceiver.PREF_ON, on);
+        if (on) e.putString(BankSmsReceiver.PREF_SERVER, server.replaceAll("/+$", "")).putString(BankSmsReceiver.PREF_TOKEN, token);
+        else e.remove(BankSmsReceiver.PREF_TOKEN);
+        e.apply();
+        if (on && !has(Manifest.permission.RECEIVE_SMS)) { requestPermissions(new String[]{Manifest.permission.RECEIVE_SMS}, REQ_SMS); return; }
+        emit("bankWatch", bankWatchState(null));
     }
 
     // ---------------------------------------------------------------- feature 1: recording
@@ -597,6 +615,12 @@ public class MainActivity extends Activity {
                 }
             });
         }
+
+        /** Admin: forward bank "money received" SMS to the server so matching rider payments are confirmed automatically. */
+        @JavascriptInterface public void setBankWatch(final String server, final String token, final boolean on) {
+            ui.post(new Runnable() { public void run() { MainActivity.this.setBankWatch(server == null ? "" : server, token == null ? "" : token, on); } });
+        }
+        @JavascriptInterface public String getBankWatch() { return bankWatchState(null).toString(); }
 
         /** Copy text (e.g. a UPI ID) to the clipboard. */
         @JavascriptInterface public void copyText(final String text) {

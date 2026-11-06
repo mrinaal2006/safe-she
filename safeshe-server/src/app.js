@@ -13,6 +13,7 @@ const { createOtpService } = require('./otp');
 const { createGeo, haversineKm } = require('./geo');
 const pricingEngine = require('./pricing');
 const reports = require('./report');
+const { parseBankSms } = require('./bankalert');
 
 const ACTIVE = ['requested', 'accepted', 'arrived', 'started'];
 const VEHICLES = ['bike', 'auto', 'cab', 'pink'];
@@ -699,7 +700,10 @@ function createApp(cfg) {
     const p = await db.one('INSERT INTO commission_payments (driver_id, amount, utr, created_at, ride_id) VALUES ($1,$2,$3,$4,$5) RETURNING id', [req.user.id, round2(amount), utr, now(), rideId]);
     log(`[payment ${p.id}] rider ${req.user.id} reported ₹${amount} (UTR ${utr})`);
     await emit('admins', 'admin:payment', { id: p.id, driverId: req.user.id, name: req.user.name, amount: round2(amount) });
-    res.json({ ok: true, id: p.id, dues: await duesFor(req.user.id) });
+    // The admin's bank alert may have arrived first: confirm straight away when UTR and amount match.
+    const alert = await db.one('SELECT * FROM bank_alerts WHERE utr = $1', [utr]);
+    const autoVerified = !!(alert && await matchAlert(alert));
+    res.json({ ok: true, id: p.id, autoVerified, dues: await duesFor(req.user.id) });
   }));
 
   // ---------------- SOS + public tracking
@@ -927,11 +931,42 @@ function createApp(cfg) {
     const act = req.params.action;
     if (act !== 'confirm' && act !== 'reject') throw httpError(400, 'Unknown action.');
     const st = act === 'confirm' ? 'confirmed' : 'rejected';
-    const p = await db.one("UPDATE commission_payments SET status = $1, reviewed_at = $2, note = $3 WHERE id = $4 AND status = 'pending' RETURNING driver_id, amount", [st, now(), str(req.body.note, 300) || null, +req.params.id || 0]);
-    if (!p) throw httpError(404, 'Payment not found or already reviewed.');
-    await emit('user:' + p.driver_id, 'payment:update', { id: +req.params.id, status: st, amount: p.amount });
+    if (!await reviewPayment(+req.params.id || 0, st, str(req.body.note, 300) || null)) throw httpError(404, 'Payment not found or already reviewed.');
     log(`[admin] payment ${req.params.id} ${st}`);
     res.json({ ok: true });
+  }));
+  async function reviewPayment(id, st, note) {
+    const p = await db.one("UPDATE commission_payments SET status = $1, reviewed_at = $2, note = $3 WHERE id = $4 AND status = 'pending' RETURNING driver_id, amount", [st, now(), note, id]);
+    if (p) await emit('user:' + p.driver_id, 'payment:update', { id, status: st, amount: p.amount, auto: /^Auto-verified/.test(note || '') });
+    return p;
+  }
+
+  // ---------------- automatic payment verification from the admin's bank "money received" SMS
+  // The SafeShe app on the admin's phone forwards bank credit alerts (or the admin pastes one). Only the amount,
+  // UPI reference and sender UPI ID are kept. A pending rider payment is confirmed when the UTR and amount match.
+  async function matchAlert(alert) {
+    if (alert.payment_id) return null;
+    const p = await db.one("SELECT id, amount FROM commission_payments WHERE UPPER(utr) = $1 AND status = 'pending'", [alert.utr]);
+    if (!p || Math.abs(p.amount - alert.amount) > 0.009) return null;
+    if (!await db.exec('UPDATE bank_alerts SET payment_id = $1 WHERE id = $2 AND payment_id IS NULL', [p.id, alert.id])) return null;
+    await reviewPayment(p.id, 'confirmed', `Auto-verified from bank alert (UTR ${alert.utr}, ₹${alert.amount})`);
+    log(`[payment ${p.id}] auto-verified from bank alert`);
+    await emit('admins', 'admin:payment-auto', { id: p.id, amount: alert.amount, utr: alert.utr });
+    return p.id;
+  }
+  app.post('/api/admin/bank-alerts', admin, wrap(async (req, res) => {
+    const parsed = parseBankSms(str(req.body.text, 1000));
+    if (!parsed) return res.json({ ok: true, credit: false, message: 'Not a UPI money-received message (needs "credited/received", an amount and a 12-digit UPI reference).' });
+    const at = num(req.body.at, 0, 1e15) || now();
+    await db.exec('INSERT INTO bank_alerts (utr, amount, vpa, source, received_at, created_at) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (utr) DO NOTHING',
+      [parsed.utr, parsed.amount, parsed.vpa, str(req.body.source, 20) || 'manual', at, now()]);
+    const alert = await db.one('SELECT * FROM bank_alerts WHERE utr = $1', [parsed.utr]);
+    const paymentId = await matchAlert(alert);
+    res.json({ ok: true, credit: true, alert: { utr: parsed.utr, amount: parsed.amount, vpa: parsed.vpa }, matchedPaymentId: paymentId || alert.payment_id || null });
+  }));
+  app.get('/api/admin/bank-alerts', admin, wrap(async (req, res) => {
+    const rows = await db.q('SELECT a.*, u.name FROM bank_alerts a LEFT JOIN commission_payments p ON p.id = a.payment_id LEFT JOIN users u ON u.id = p.driver_id ORDER BY a.id DESC LIMIT 50');
+    res.json({ alerts: rows.map(a => ({ id: a.id, utr: a.utr, amount: a.amount, vpa: a.vpa, source: a.source, receivedAt: a.received_at, paymentId: a.payment_id, rider: a.name || null })) });
   }));
   app.get('/api/admin/otps', admin, wrap(async (req, res) => res.json({ testMode: await otp.isTestMode(), codes: await otp.recentTestCodes() })));
   // Admin can enter the 2Factor API key here (checked with 2Factor, stored in the database, shown only masked).

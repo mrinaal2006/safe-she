@@ -97,7 +97,8 @@
     "admin:driver_pending": function () { toast("New rider waiting for approval"); adminLive("rider"); },
     "admin:payment": function (p) { toast("💰 " + (p.name || "A rider") + " reported a commission payment of " + rupees(p.amount), 5000); adminLive("payment"); },
     "admin:pass": function (p) { toast("🎫 " + (p.name || "A rider") + " bought a " + (p.kind === "full" ? "Full-Day" : "Half-Day") + " Pass (" + rupees(p.price) + ")", 5000); adminLive("payment"); },
-    "payment:update": function (p) { toast(p.status === "confirmed" ? "✅ Your payment of " + rupees(p.amount) + " was confirmed" : "❌ Your payment of " + rupees(p.amount) + " was not verified. Check the UPI reference.", 6000); loadDues(); }
+    "admin:payment-auto": function (p) { toast("✅ " + rupees2(p.amount) + " auto-verified from a bank alert (UTR " + p.utr + ")", 5000); adminLive("payment"); },
+    "payment:update": function (p) { toast(p.status === "confirmed" ? "✅ Your payment of " + rupees(p.amount) + " was confirmed" + (p.auto ? " automatically" : "") : "❌ Your payment of " + rupees(p.amount) + " was not verified. Check the UPI reference.", 6000); loadDues(); }
   };
   function connectSocket() { // name kept for the callers; starts the event poller
     stopLive();
@@ -143,7 +144,10 @@
     if (!apiBase() && !isWeb) { showScreen("scr-server"); $("serverUrl").value = pref("server") || ""; return; }
     if (!session) { showScreen("scr-welcome"); return; }
     if (session.kind === "admin") {
-      api("GET", "/api/admin/stats").then(function () { connectSocket(); showScreen("scr-admin"); adminTab(adminCur || "dash"); })
+      api("GET", "/api/admin/stats").then(function () {
+        connectSocket(); showScreen("scr-admin"); adminTab(adminCur || "dash");
+        var bw = bankWatchState(); if (bw && bw.on) A.setBankWatch(apiBase(), session.token, true); // refresh the saved login
+      })
         .catch(function (e) { if (e.status !== 401) offlineRetry(e); });
       return;
     }
@@ -174,6 +178,7 @@
   function forceLogout(msg) {
     if (driverOnline) setOnlineLocal(false);
     stopLive();
+    if (session && session.kind === "admin" && A && A.setBankWatch) { try { A.setBankWatch("", "", false); } catch (e) {} }
     saveSession(null); me = null; curRide = null; driverRide = null; role = null;
     if (msg) toast(msg, 4500);
     showScreen("scr-welcome");
@@ -1216,6 +1221,43 @@
   var adminCur = null, adminTimer = null;
   document.querySelectorAll("#adminTabs button").forEach(function (b) { b.onclick = function () { adminTab(b.dataset.tab); }; });
   $("btnAdminLogout").onclick = function () { if (confirm("Log out of the admin panel?")) logout(); };
+  function bankWatchState() {
+    if (!A || !A.getBankWatch) return null;
+    try { return JSON.parse(A.getBankWatch()); } catch (e) { return null; }
+  }
+  /** Admin → Payments: confirm rider payments automatically from the admin's bank "money received" SMS. */
+  function autoVerifyCard(alerts) {
+    var card = el("section", { class: "card" }, el("h3", { text: "⚡ Automatic verification" }),
+      el("p", { class: "small muted", text: "When your bank sends a \"money received\" SMS, SafeShe reads the amount and UPI reference (UTR). A rider's payment with the same UTR and amount is confirmed automatically. Anything that doesn't match stays here for you to check." }));
+    var bw = bankWatchState();
+    if (bw) {
+      var sw = el("input", { type: "checkbox" }); sw.checked = !!bw.on;
+      sw.onchange = function () { A.setBankWatch(apiBase(), session.token, sw.checked); };
+      card.appendChild(el("label", { class: "check" }, sw, " Read bank SMS on this phone (the phone where your bank account's SMS arrive)"));
+      card.appendChild(el("p", { class: "small muted", text: "Only messages with \"credited/received\", an amount and a 12-digit UPI reference are sent to SafeShe; other SMS are ignored. Turn off any time." }));
+    } else {
+      card.appendChild(el("p", { class: "small", text: "📱 To make this automatic, log in as admin in the SafeShe Android app on the phone that receives your bank's SMS, open Payments and switch on \"Read bank SMS\". Or paste a bank SMS below." }));
+    }
+    var ta = el("textarea", { rows: 3, placeholder: "Paste a bank \"credited\" SMS, e.g. Rs.90.00 credited to A/c XX1234 … UPI Ref 512345678901" });
+    card.appendChild(ta);
+    card.appendChild(act("Check this SMS", "ghost", function () {
+      return api("POST", "/api/admin/bank-alerts", { text: ta.value, source: "manual" }).then(function (x) {
+        if (!x.credit) { toast(x.message, 6000); return; }
+        toast(x.matchedPaymentId ? "✅ Matched and confirmed: " + rupees2(x.alert.amount) + " (UTR " + x.alert.utr + ")" : "Saved " + rupees2(x.alert.amount) + " (UTR " + x.alert.utr + "). It will be confirmed when a rider submits this UTR.", 6000);
+        adminTab("payments", true);
+      });
+    }));
+    if (alerts.length) {
+      card.appendChild(el("p", { class: "small muted", text: "Recent bank alerts" }));
+      card.appendChild(el("div", { class: "list" }, alerts.slice(0, 10).map(function (a) {
+        return el("div", { class: "item" },
+          el("div", { class: "between" }, el("b", { text: rupees2(a.amount) + (a.vpa ? " from " + a.vpa : "") }),
+            el("span", { class: "pill " + (a.paymentId ? "" : "amber"), text: a.paymentId ? "✓ " + (a.rider || "matched") : "no rider UTR yet" })),
+          el("div", { class: "small muted" }, "UTR ", el("span", { class: "upiid", text: a.utr }), " · " + (a.source === "sms" ? "bank SMS" : "pasted") + " · " + when(a.receivedAt)));
+      })));
+    }
+    return card;
+  }
   function adminLive(kind) {
     if (!session || session.kind !== "admin") return;
     clearTimeout(adminTimer);
@@ -1462,14 +1504,16 @@
     },
     payments: function (c) {
       var f = adminFilter.payments || "pending";
-      return Promise.all([api("GET", "/api/admin/payments" + (f === "all" ? "" : "?status=" + f)), api("GET", "/api/admin/dues"), api("GET", "/api/admin/payment-settings")]).then(function (x) {
+      return Promise.all([api("GET", "/api/admin/payments" + (f === "all" ? "" : "?status=" + f)), api("GET", "/api/admin/dues"), api("GET", "/api/admin/payment-settings"),
+        api("GET", "/api/admin/bank-alerts").catch(function () { return { alerts: [] }; })]).then(function (x) {
         var pays = x[0].payments, d = x[1], ps = x[2]; c.innerHTML = "";
         if (!ps.upiId) c.appendChild(el("p", { class: "testcode", text: "Set your UPI ID in Settings → Payments so riders can pay their commission." }));
         function k(label, v, alert) { return el("div", { class: "kpi" + (alert ? " alert" : "") }, el("small", { text: label }), el("b", { text: v })); }
         c.appendChild(el("div", { class: "kpis" }, k("Total commission", rupees(d.totals.charged)), k("Received (confirmed)", rupees(d.totals.paid)), k("Still due", rupees(d.totals.due), d.totals.due > 0), k("Waiting to verify", rupees(d.totals.pending), d.totals.pending > 0)));
+        c.appendChild(autoVerifyCard(x[3].alerts));
         c.appendChild(el("h3", { text: "Payments reported by riders" }));
         c.appendChild(filterChips(["pending", "confirmed", "rejected", "all"], f, function (v) { adminFilter.payments = v; adminTab("payments"); }));
-        c.appendChild(el("p", { class: "muted small", text: "Check each UPI reference (UTR) in your bank or UPI app before confirming." }));
+        c.appendChild(el("p", { class: "muted small", text: "Payments that match a bank alert are confirmed automatically. Check the others' UPI reference (UTR) in your bank or UPI app before confirming." }));
         c.appendChild(pays.length ? el("div", { class: "list" }, pays.map(function (p) {
           return el("div", { class: "item" },
             el("div", { class: "between" }, el("h4", { text: rupees(p.amount) + " · " + (p.name || "Rider") }), el("span", { class: "pill " + (p.status === "pending" ? "amber" : p.status === "rejected" ? "red" : ""), text: p.status })),
@@ -1635,6 +1679,8 @@
         case "playStarted": playing = true; status("recStatus", "Playing…"); break;
         case "playStopped": playing = false; status("recStatus", "Playback stopped."); break;
         case "saveResult": status("recStatus", d.message, d.ok ? "good" : "bad"); toast(d.message); break;
+        case "bankWatch": if (d.message) toast(d.message, 7000); else toast(d.on ? "✅ Auto-verify is on for this phone" : "Auto-verify is off on this phone", 3500);
+          if (adminCur === "payments") adminTab("payments", true); break;
         case "fileSaved": toast((d.ok ? "✅ " : "⚠️ ") + d.message + (d.ok && /\.png$/i.test(d.name || "") ? ". In your UPI app: Scan → gallery → pick this image." : ""), 7000);
           if (reportStatus && !/\.png$/i.test(d.name || "")) reportStatus(d.message, d.ok); break;
         case "location": resolveLoc(d); break;

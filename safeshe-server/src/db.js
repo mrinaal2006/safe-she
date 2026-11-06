@@ -191,6 +191,13 @@ const SCHEMA = `
   ALTER TABLE drivers ADD COLUMN IF NOT EXISTS upi_id TEXT NOT NULL DEFAULT '';
   ALTER TABLE rides ADD COLUMN IF NOT EXISTS collected_at BIGINT;
   ALTER TABLE commission_payments ADD COLUMN IF NOT EXISTS ride_id BIGINT;
+  -- Auto-verification: money-received alerts from the admin's bank SMS (parsed: amount + UPI reference only,
+  -- the SMS text itself is not stored). A rider's payment is confirmed when UTR and amount match.
+  CREATE TABLE IF NOT EXISTS bank_alerts (
+    id BIGSERIAL PRIMARY KEY, utr TEXT NOT NULL, amount DOUBLE PRECISION NOT NULL, vpa TEXT, source TEXT,
+    received_at BIGINT NOT NULL, created_at BIGINT NOT NULL, payment_id BIGINT
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS bank_alerts_utr ON bank_alerts (utr);
 `;
 
 function connectionString(env) {

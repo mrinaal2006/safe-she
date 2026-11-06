@@ -31,7 +31,7 @@ or `TILE_URL` (raster) on the server.
 | `api/`, `vercel.json`, `package.json` | Vercel deployment from the repository root |
 | [`safeshe-server/`](safeshe-server/README.md) | Server code (Express + Postgres) and its tests |
 | [`safeshe-android/`](safeshe-android/README.md) | Android app (WebView app + native recording, location, SMS, dialling) |
-| `outputs/SafeShe-4.6.apk` | Latest signed APK. It connects to the built-in server address. |
+| `outputs/SafeShe-4.7.apk` | Latest signed APK. It connects to the built-in server address. |
 
 ## Deploy on Vercel
 1. **Import:** vercel.com → **Add New → Project** → import `safe-she`.
@@ -119,12 +119,19 @@ What a rider owes = platform fees + Minimum amounts (Admin → Fares) + passes b
 3. After paying, the rider enters the **UPI reference (UTR)**. You check it in your bank/UPI app and press
    **Confirm received** in Admin → **Payments**. The rider is notified and the dues are cleared.
 
-A plain UPI ID can't tell the server automatically that money arrived, so the admin confirms each UTR. Automatic
-verification needs a payment gateway (e.g. Razorpay, Cashfree). Some UPI apps limit "pay" links to personal UPI IDs;
+**Automatic verification (from your bank SMS).** A plain UPI ID can't tell the server that money arrived, but your
+bank's "money received" SMS can. In the SafeShe Android app, log in as admin on the phone that receives your bank's
+SMS, open **Payments** and switch on **Read bank SMS**. When an SMS with "credited/received", an amount and a 12-digit
+UPI reference arrives, the app sends it to the server, which keeps only the amount, UTR and sender UPI ID. A rider's
+payment with the **same UTR and amount** is then confirmed automatically (whichever comes first, the SMS or the rider's
+UTR). Anything that doesn't match stays pending for you. Other SMS are ignored. You can also paste a bank SMS in
+**Check this SMS** (works in the browser too). On Android 13+, if the SMS permission is blocked as a "restricted
+setting": App info → ⋮ → **Allow restricted settings**, then switch it on again. (Idea inspired by the YouPI-PG
+project; SafeShe's code is its own.) Some UPI apps limit "pay" links to personal UPI IDs;
 a business/merchant UPI ID works best.
 
 ## Android app
-Install `outputs/SafeShe-4.6.apk`. It connects to **https://safe-she-one.vercel.app** automatically, with no server
+Install `outputs/SafeShe-4.7.apk`. It connects to **https://safe-she-one.vercel.app** automatically, with no server
 address to type. `./safeshe-android/build.sh` builds with that address by default. Set `SAFESHE_SERVER_URL=https://…`
 to build for another server.
 
