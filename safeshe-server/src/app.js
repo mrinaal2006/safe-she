@@ -470,7 +470,9 @@ function createApp(cfg) {
       const r = searchRegions.list.find(x => x.id === (+req.query.region || 0));
       if (r) { area = { lat: r.lat, lng: r.lng, radiusKm: r.radius_km }; if (!near || haversineKm(r, near) > r.radius_km) near = { lat: r.lat, lng: r.lng }; }
     }
-    res.json({ results: await geo.search(req.query.q, near, req.query.suggest === '1', area) });
+    const t0 = Date.now(), results = await geo.search(req.query.q, near, req.query.suggest === '1', area);
+    res.set('Server-Timing', `places;dur=${Date.now() - t0}`);
+    res.json({ results });
   }));
   // Public list of regions (for the region picker): active = rides available, inactive = coming soon.
   app.get('/api/regions', wrap(async (req, res) => res.json({ regions: (await regionsAll()).map(regionView) })));
