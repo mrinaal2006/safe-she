@@ -266,8 +266,9 @@
   // ---------------- profiles
   function local10(p) { return (p || "").replace(/^\+91/, ""); }
   function openProfile() {
+    $("btnPfBack").hidden = !(me && me.name);
     $("pfName").value = me.name || ""; $("pfGender").value = me.gender || ""; $("pfEmergency").value = local10(me.emergencyPhone);
-    status("profileStatus", ""); showScreen("scr-profile");
+    status("profileStatus", ""); showScreen("scr-profile"); $("scr-profile").scrollTop = 0;
   }
   $("btnProfileSave").onclick = function () {
     api("PUT", "/api/me", { name: $("pfName").value, gender: $("pfGender").value, emergencyPhone: digitsOnly($("pfEmergency").value) })
@@ -277,12 +278,22 @@
   document.querySelectorAll("#dpVehicle button").forEach(function (b) {
     b.onclick = function () { dpVehicle = b.dataset.v; document.querySelectorAll("#dpVehicle button").forEach(function (x) { x.classList.toggle("on", x === b); }); };
   });
+  /** Back from "Edit my details" to where the user came from (only when editing, not first registration). */
+  function profileBack() {
+    if (me && me.role === "driver" && me.driver && me.driver.status !== "approved") showPending();
+    else { showScreen("scr-main"); $("page-account").hidden = false; try { renderMe(); } catch (e) {} } // back to My account
+  }
+  $("btnDpBack").onclick = profileBack; $("btnPfBack").onclick = profileBack;
   function openDriverProfile() {
     var d = me.driver || {};
+    var editing = !!(me.driver && me.driver.vehicleType);
+    $("btnDpBack").hidden = !editing;
+    $("dpTitle").textContent = editing ? "Edit rider details" : "Rider registration";
+    $("btnDriverProfileSave").textContent = editing ? "Save changes" : "Submit for approval";
     $("dpName").value = me.name || ""; $("dpGender").value = me.gender || "female";
     $("dpModel").value = d.vehicleModel || ""; $("dpPlate").value = d.plate || ""; $("dpLicense").value = d.licenseNo || ""; $("dpUpi").value = d.upiId || ""; $("dpEmergency").value = local10(me.emergencyPhone);
     dpVehicle = d.vehicleType || ""; document.querySelectorAll("#dpVehicle button").forEach(function (x) { x.classList.toggle("on", x.dataset.v === dpVehicle); });
-    status("driverProfileStatus", ""); showScreen("scr-driver-profile");
+    status("driverProfileStatus", ""); showScreen("scr-driver-profile"); $("scr-driver-profile").scrollTop = 0;
   }
   $("btnDriverProfileSave").onclick = function () {
     if (!dpVehicle) { status("driverProfileStatus", "Choose your vehicle type.", "bad"); return; }
@@ -498,13 +509,19 @@
   }
 
   // Destination search: suggestions while typing (any place, ranked near the pickup), full search on Enter.
-  var searchSeq = 0, suggestTimer = null;
+  var searchSeq = 0, suggestTimer = null, searchCache = {}, searchCacheKeys = [];
   function runSearch(q, suggest) {
     var list = $("results"), seq = ++searchSeq;
-    if (!suggest || !list.children.length) { list.innerHTML = ""; list.appendChild(el("li", { class: "muted", text: "Searching…" })); }
-    var near = pickup ? "&lat=" + pickup[0] + "&lng=" + pickup[1] : "";
+    var near = pickup ? "&lat=" + pickup[0].toFixed(2) + "&lng=" + pickup[1].toFixed(2) : "";
     var reg = region ? "&region=" + region.id : ""; // search only inside the chosen region
-    api("GET", "/api/geo/search?q=" + encodeURIComponent(q) + near + reg + (suggest ? "&suggest=1" : "")).then(function (r) {
+    var url = "/api/geo/search?q=" + encodeURIComponent(q.toLowerCase()) + near + reg + (suggest ? "&suggest=1" : "");
+    // Results already fetched in this session show instantly (e.g. after backspace).
+    var hit = searchCache[url];
+    if (!hit && (!suggest || !list.children.length)) { list.innerHTML = ""; list.appendChild(el("li", { class: "muted", text: "Searching…" })); }
+    (hit ? Promise.resolve(hit) : api("GET", url).then(function (r) {
+      searchCache[url] = r; searchCacheKeys.push(url); if (searchCacheKeys.length > 80) delete searchCache[searchCacheKeys.shift()];
+      return r;
+    })).then(function (r) {
       if (seq !== searchSeq) return; // a newer search is running
       list.innerHTML = "";
       if (!r.results.length) { list.appendChild(el("li", { class: "muted", text: suggest ? "Keep typing, or press 🔍 to search everywhere." : "No places found. Try another spelling, add the city, or choose on the map." })); return; }
@@ -518,8 +535,14 @@
   $("dropInput").addEventListener("input", function () {
     clearTimeout(suggestTimer);
     var q = this.value.trim();
-    if (q.length < 3) { searchSeq++; $("results").innerHTML = ""; return; }
-    suggestTimer = setTimeout(function () { runSearch(q, true); }, 350);
+    if (q.length < 2) { searchSeq++; $("results").innerHTML = ""; return; }
+    suggestTimer = setTimeout(function () { runSearch(q, true); }, 180);
+  });
+  // Wake the server (and its place-search connection) as soon as the passenger taps the search box.
+  var searchWarm = 0;
+  $("dropInput").addEventListener("focus", function () {
+    if (Date.now() - searchWarm < 60000) return; searchWarm = Date.now();
+    api("GET", "/api/geo/search?q=" + encodeURIComponent("warm") + (region ? "&region=" + region.id : "") + "&suggest=1&warm=1").catch(function () {});
   });
   $("searchForm").onsubmit = function (e) {
     e.preventDefault(); clearTimeout(suggestTimer);
@@ -652,6 +675,12 @@
       $("drvName").textContent = d.name; $("drvRating").textContent = d.rating ? "★ " + d.rating : "New rider";
       $("drvVehicle").textContent = VEH_NAME[r.vehicle] + " · " + (d.vehicleModel || ""); $("drvPlate").textContent = d.plate || "";
       $("otp").textContent = r.otp;
+      // Rider's UPI ID, visible from acceptance so the passenger can pay straight to the rider.
+      var ub = $("drvUpi"); ub.innerHTML = "";
+      if (d.upiId) ub.appendChild(el("div", { class: "drvupi" }, el("span", { class: "small muted", text: "Rider's UPI ID" }),
+        el("span", { class: "upiid", text: d.upiId }),
+        el("button", { class: "ghost small", text: "📋 Copy", onclick: function () { copyText(d.upiId).then(function () { toast("UPI ID copied: " + d.upiId, 3500); }); } })));
+      ub.hidden = !d.upiId;
       if (d.lat != null) moveDriver([d.lat, d.lng]);
     }
     if (s === "accepted") { $("rideStatus").textContent = "Rider is on the way"; updateEta(); }
@@ -1495,14 +1524,15 @@
       });
     },
     settings: function (c) {
-      return Promise.all([api("GET", "/api/admin/otps"), api("GET", "/api/admin/sms-status").catch(function (e) { return { message: e.message }; })]).then(function (x) {
-        var r = x[0], sms = x[1];
+      // Quick key status first (no call to 2Factor), so Settings opens at once; the SMS balance fills in after.
+      return Promise.all([api("GET", "/api/admin/otps"), api("GET", "/api/admin/sms-status?quick=1").catch(function (e) { return { message: e.message }; })]).then(function (x) {
+        var r = x[0], sms = x[1], smsLine;
         c.innerHTML = "";
         var srcText = sms.source === "env" ? "Key from Vercel settings (TWOFACTOR_API_KEY) " + (sms.keyHint || "")
           : sms.source === "admin" ? "Key saved here in the admin panel " + (sms.keyHint || "") : "No key saved yet";
         var keyIn = el("input", { type: "password", autocomplete: "off", spellcheck: "false", placeholder: "Paste your 2Factor API key (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)" });
         var box = el("section", { class: "card" }, el("h3", { text: "Login OTP delivery (SMS)" }),
-          el("p", { class: "small " + (sms.ok ? "" : "status bad"), text: (sms.ok ? "✅ " : "⚠️ ") + sms.message }),
+          smsLine = el("p", { class: "small " + (sms.pending || sms.ok ? "" : "status bad"), text: (sms.pending ? "⏳ " : sms.ok ? "✅ " : "⚠️ ") + sms.message }),
           el("p", { class: "small muted", text: "This admin panel is connected to: " + (apiBase() || location.origin) + " · " + srcText }),
           sms.source !== "env" ? el("div", null,
             el("label", { class: "small muted", text: "2Factor API key (from 2factor.in → Account Summary). It's checked with 2Factor, then saved for every SafeShe server that uses this database." }),
@@ -1524,6 +1554,9 @@
         }
         if (r.testMode) box.appendChild(r.codes.length ? el("div", { class: "list" }, r.codes.map(function (x) { return el("div", { class: "small", text: x.phone + " → " + x.code + " · " + when(x.at) }); })) : el("p", { class: "muted small", text: "No codes requested yet." }));
         c.appendChild(box);
+        if (sms.pending) api("GET", "/api/admin/sms-status").then(function (f) {
+          smsLine.className = "small " + (f.ok ? "" : "status bad"); smsLine.textContent = (f.ok ? "✅ " : "⚠️ ") + f.message;
+        }).catch(function (e) { smsLine.textContent = "⚠️ " + e.message; });
         // Pricing rules: night premium, long-pickup surcharge, gridlock trigger, rider plans (tiers)
         var pr = { night: {}, pickup: {}, gridlock: {}, tiers: { perRide: {}, half: {}, full: {} } };
         function nf(obj, key, label, step) {
@@ -1591,6 +1624,8 @@
     if ([].some.call(document.querySelectorAll(".page"), function (p) { return !p.hidden; })) { closePages(); return true; }
     if (pickMode) { pickMode = null; sheet.style.transform = ""; return true; }
     if (!$("scr-login").hidden) { showScreen("scr-welcome"); return true; }
+    if (!$("scr-driver-profile").hidden && !$("btnDpBack").hidden) { profileBack(); return true; }
+    if (!$("scr-profile").hidden && !$("btnPfBack").hidden) { profileBack(); return true; }
     if (role === "passenger" && !curRide && drop && !$("scr-main").hidden) { resetPassenger(); return true; }
     return false;
   }

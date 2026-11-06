@@ -95,10 +95,20 @@ function createOtpService(db, cfg, log) {
   }
 
   /** SMS account status for the admin panel (2Factor balance), without exposing the key. */
-  async function smsStatus() {
+  // The 2Factor balance check takes a network round trip: remember the answer for a minute.
+  let balCache = null;
+  async function smsStatus(opts) {
     const { key, source } = await keyInfo();
     const base = { provider: '2Factor.in', source, keyHint: mask(key), configured: !!key };
     if (!key) return { ...base, message: 'No 2Factor API key yet, so login codes are NOT sent by SMS (test mode). Enter your key below.' };
+    if (balCache && balCache.key === key && Date.now() - balCache.at < 60000) return { ...base, ...balCache.value };
+    if (opts && opts.quick) return { ...base, pending: true, message: 'Checking SMS sending and balance…' };
+    const value = await checkBalance(key);
+    if (value.ok) balCache = { key, at: Date.now(), value };
+    return { ...base, ...value };
+  }
+  async function checkBalance(key) {
+    const base = {};
     try {
       const r = await call2Factor(key, '/BAL/SMS');
       if (r.ok) {
@@ -116,7 +126,7 @@ function createOtpService(db, cfg, log) {
     const k = String(newKey || '').trim();
     if (!k) {
       await db.exec("DELETE FROM kv WHERE key = 'twofactor_key'");
-      cache = null;
+      cache = null; balCache = null;
       return smsStatus();
     }
     if (!/^[A-Za-z0-9-]{16,64}$/.test(k)) throw err(400, 'That does not look like a 2Factor API key (letters, numbers and dashes, e.g. xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).');

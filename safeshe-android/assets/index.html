@@ -120,6 +120,7 @@
 <!-- ======================= passenger profile ======================= -->
 <section class="screen center" id="scr-profile" hidden>
   <div class="authbox">
+    <button class="backbtn" id="btnPfBack" hidden aria-label="Back">← Back</button>
     <h2>Your details</h2>
     <label class="small muted" for="pfName">Full name</label>
     <input id="pfName" type="text" maxlength="60" autocomplete="name">
@@ -136,7 +137,8 @@
 <!-- ======================= rider (driver) profile ======================= -->
 <section class="screen center" id="scr-driver-profile" hidden>
   <div class="authbox">
-    <h2>Rider registration</h2>
+    <button class="backbtn" id="btnDpBack" hidden aria-label="Back">← Back</button>
+    <h2 id="dpTitle">Rider registration</h2>
     <label class="small muted" for="dpName">Full name (as on licence)</label>
     <input id="dpName" type="text" maxlength="60">
     <label class="small muted" for="dpGender">Gender</label>
@@ -232,6 +234,7 @@
         </div>
         <div class="otp"><small>OTP</small><b id="otp"></b></div>
       </div>
+      <div id="drvUpi" hidden></div>
       <div class="row" id="driverActions" hidden><button class="ghost" id="btnCallDriver">📞 Call rider</button></div>
       <div class="tripline small muted" id="tripLine"></div>
       <div class="safety">

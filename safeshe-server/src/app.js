@@ -459,12 +459,15 @@ function createApp(cfg) {
   }));
 
   // ---------------- geo
+  let searchRegions = null;
   app.get('/api/geo/search', auth('any'), wrap(async (req, res) => {
     let near = req.query.lat ? point({ lat: req.query.lat, lng: req.query.lng }) : null;
     // With a region selected, search only inside that region (all nearby places in the city).
     let area = null;
     if (req.query.region) {
-      const r = await db.one('SELECT * FROM regions WHERE id = $1', [+req.query.region || 0]);
+      // Region circle for the search area: cached for 60 s (one less database round trip per keystroke).
+      if (!searchRegions || Date.now() - searchRegions.at > 60000) searchRegions = { at: Date.now(), list: await regionsAll() };
+      const r = searchRegions.list.find(x => x.id === (+req.query.region || 0));
       if (r) { area = { lat: r.lat, lng: r.lng, radiusKm: r.radius_km }; if (!near || haversineKm(r, near) > r.radius_km) near = { lat: r.lat, lng: r.lng }; }
     }
     res.json({ results: await geo.search(req.query.q, near, req.query.suggest === '1', area) });
@@ -974,7 +977,7 @@ function createApp(cfg) {
     const st = await otp.saveKey(req.body && req.body.key);
     res.json(st);
   }));
-  app.get('/api/admin/sms-status', admin, wrap(async (req, res) => res.json(await otp.smsStatus())));
+  app.get('/api/admin/sms-status', admin, wrap(async (req, res) => res.json(await otp.smsStatus({ quick: req.query.quick === '1' }))));
   app.post('/api/admin/sms-test', admin, wrap(async (req, res) => {
     const phone = sec.normalizePhone(req.body.phone);
     if (!phone) throw httpError(400, 'Enter a valid 10-digit Indian mobile number.');
