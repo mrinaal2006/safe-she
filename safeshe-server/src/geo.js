@@ -84,8 +84,12 @@ function createGeo(cfg, log) {
       if (!out.length && failures >= (suggest ? 1 : 2)) throw Object.assign(new Error('Place search is unavailable right now. Choose the destination on the map.'), { status: 503 });
       // De-duplicate near-identical results.
       const seen = new Set();
-      out = out.filter(o => { const k = o.name.toLowerCase() + '|' + o.lat.toFixed(3) + ',' + o.lng.toFixed(3); if (seen.has(k)) return false; seen.add(k); return true; })
-        .slice(0, suggest ? 8 : 15);
+      out = out.filter(o => { const k = o.name.toLowerCase() + '|' + o.lat.toFixed(3) + ',' + o.lng.toFixed(3); if (seen.has(k)) return false; seen.add(k); return true; });
+      // Places whose name contains every word typed come first (stable: keeps nearby-first order within a group).
+      const words = q.toLowerCase().split(/[\s,]+/).filter(w => w.length > 1);
+      const score = o => { const n = (o.name + ' ' + o.address).toLowerCase(), nm = o.name.toLowerCase();
+        return words.every(w => nm.includes(w)) ? 2 : words.every(w => n.includes(w)) ? 1 : 0; };
+      out = out.map((o, i) => ({ o, i, s: score(o) })).sort((a, b) => b.s - a.s || a.i - b.i).map(x => x.o).slice(0, suggest ? 8 : 15);
       if (near) out.forEach(o => { o.distanceKm = +haversineKm(near, o).toFixed(1); });
       return out;
     });
