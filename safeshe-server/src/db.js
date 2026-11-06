@@ -110,8 +110,13 @@ const SCHEMA = `
 `;
 
 function connectionString(env) {
-  const s = env.DATABASE_URL || env.POSTGRES_URL || env.POSTGRES_PRISMA_URL || '';
-  if (!s) throw new Error('DATABASE_URL is not set. Add a Postgres database (for example Vercel → Storage → Neon).');
+  let s = env.DATABASE_URL || env.POSTGRES_URL || env.POSTGRES_PRISMA_URL || '';
+  if (!s) {
+    // Vercel's Storage integration can add a custom prefix (e.g. STORAGE_DATABASE_URL, NEON_POSTGRES_URL).
+    const key = Object.keys(env).sort().find(k => /_(DATABASE_URL|POSTGRES_URL)$/.test(k) && /^postgres(ql)?:\/\//.test(env[k] || ''));
+    if (key) s = env[key];
+  }
+  if (!s) throw new Error('Database not connected: DATABASE_URL is not set. In Vercel open Storage → Neon → Connect to this project (all environments), then Deployments → Redeploy.');
   return s;
 }
 
