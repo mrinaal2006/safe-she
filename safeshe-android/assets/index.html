@@ -56,7 +56,8 @@
       <label class="small muted" for="adminUser">Username or email</label>
       <input id="adminUser" type="text" autocomplete="username" autocapitalize="off" inputmode="email" placeholder="Administrator or your admin email">
       <label class="small muted" for="adminPass">Password</label>
-      <input id="adminPass" type="password" autocomplete="current-password">
+      <div class="phonefield"><input id="adminPass" type="password" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false"><button type="button" class="link" id="btnShowPass" style="padding:0 12px" aria-label="Show password">Show</button></div>
+      <p class="small status bad" id="capsWarn" hidden>⚠️ Caps Lock is on. Passwords are case-sensitive.</p>
       <button class="primary wide" id="btnAdminDoLogin">Log in</button>
     </div>
     <div class="status" id="loginStatus"></div>

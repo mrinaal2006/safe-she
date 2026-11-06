@@ -241,6 +241,14 @@
     }).catch(function (e) { status("loginStatus", e.message, "bad"); });
   };
   $("adminPass").addEventListener("keydown", function (e) { if (e.key === "Enter") $("btnAdminDoLogin").click(); });
+  // Warn about Caps Lock (passwords are case-sensitive) and let the admin see what they typed.
+  ["keydown", "keyup"].forEach(function (ev) {
+    $("adminPass").addEventListener(ev, function (e) { if (e.getModifierState) $("capsWarn").hidden = !e.getModifierState("CapsLock"); });
+  });
+  $("btnShowPass").onclick = function () {
+    var p = $("adminPass"), show = p.type === "password";
+    p.type = show ? "text" : "password"; this.textContent = show ? "Hide" : "Show"; p.focus();
+  };
 
   // ---------------- profiles
   function local10(p) { return (p || "").replace(/^\+91/, ""); }
