@@ -336,3 +336,6 @@ table.fares input { padding: 6px 8px; min-width: 60px; }
 .upialt-btns { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
 .upialt-btns button { flex: 1 1 140px; }
 .upialt p { margin: 6px 0 0; text-align: center; }
+.upiapps { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 8px 0; }
+.upiapps button.small { flex: 1 1 30%; }
+.upiapps p { width: 100%; text-align: center; margin: 0; }

@@ -706,10 +706,59 @@
   }
 
   // ============================================================ ride payments (UPI deep link + QR)
-  /** UPI payment link understood by GPay, PhonePe, Paytm, BHIM and other UPI apps. */
+  /**
+   * UPI payment link understood by GPay, PhonePe, Paytm, BHIM and other UPI apps (NPCI upi://pay format).
+   * Kept plain on purpose: letters/digits only in the name and note (characters like # or & make some apps refuse
+   * the payment), no merchant-only fields (tr, mc, mode), which personal UPI IDs are not allowed to use.
+   */
   function upiLink(vpa, name, amount, note) {
-    return "upi://pay?pa=" + encodeURIComponent(vpa).replace(/%40/g, "@") + "&pn=" + encodeURIComponent(name || "SafeShe") +
-      (amount ? "&am=" + Number(amount).toFixed(2) : "") + "&cu=INR" + (note ? "&tn=" + encodeURIComponent(note) : "");
+    function clean(t, max) { return String(t || "").replace(/[^A-Za-z0-9 .]/g, " ").replace(/\s+/g, " ").trim().slice(0, max); }
+    return "upi://pay?pa=" + encodeURIComponent(String(vpa).trim()).replace(/%40/g, "@") + "&pn=" + encodeURIComponent(clean(name, 40) || "SafeShe") +
+      (amount ? "&am=" + Number(amount).toFixed(2) : "") + "&cu=INR" + (note ? "&tn=" + encodeURIComponent(clean(note, 50)) : "");
+  }
+  /** UPI apps for the per-app buttons in a browser (in the Android app the installed ones are listed instead). */
+  var UPI_APPS = [
+    { pkg: "com.google.android.apps.nbu.paisa.user", name: "GPay" }, { pkg: "com.phonepe.app", name: "PhonePe" },
+    { pkg: "net.one97.paytm", name: "Paytm" }, { pkg: "in.org.npci.upiapp", name: "BHIM" }];
+  function installedUpiApps() {
+    if (!A || !A.upiApps) return null;
+    try { return JSON.parse(A.upiApps()); } catch (e) { return []; }
+  }
+  var upiWaiting = null; // { utrInput } while a UPI app is open
+  /** Opens one UPI app with the payment filled in. In the Android app the UPI app reports back status + UPI reference. */
+  function payWithApp(link, pkg, utrInput) {
+    upiWaiting = { utrInput: utrInput || null };
+    if (A && A.payUpi) { A.payUpi(link, pkg || ""); return; }
+    var isAndroid = /Android/i.test(navigator.userAgent);
+    if (pkg && isAndroid) { location.href = "intent://pay?" + link.split("?")[1] + "#Intent;scheme=upi;package=" + pkg + ";end"; return; }
+    openUrl(link);
+  }
+  function parseUpiResponse(raw) {
+    var o = {}; String(raw || "").split("&").forEach(function (kv) { var i = kv.indexOf("="); if (i > 0) o[kv.slice(0, i).trim().toLowerCase()] = decodeURIComponent(kv.slice(i + 1).trim()); });
+    var ref = [o.approvalrefno, o.txnref, o.txnid].filter(function (x) { return x && /^[0-9]{12}$/.test(x); })[0] || o.approvalrefno || "";
+    return { status: (o.status || "").toUpperCase(), ref: ref, code: o.responsecode || "" };
+  }
+  function onUpiResult(d) {
+    var w = upiWaiting; upiWaiting = null;
+    if (d.status === "noapp") { toast(d.message, 5000); return; }
+    var r = parseUpiResponse(d.response);
+    if (r.status === "SUCCESS" || r.status === "SUBMITTED") {
+      if (w && w.utrInput && r.ref && $(w.utrInput)) { $(w.utrInput).value = r.ref; }
+      toast("✅ UPI app says: payment " + (r.status === "SUCCESS" ? "successful" : "submitted") + (r.ref ? ". UPI ref " + r.ref + (w && w.utrInput ? " filled in, tap Submit." : "") : ". Enter the UPI reference from your UPI app."), 7000);
+    } else if (r.status === "FAILURE" || r.status === "FAILED") {
+      toast("❌ Payment failed or was declined in the UPI app. Try another app, the QR code (Save QR → Scan from gallery) or Copy UPI ID.", 8000);
+    } else {
+      toast("No answer from the UPI app. If you paid, enter the UPI reference (UTR) from the app.", 6000);
+    }
+  }
+  /** Row of "Pay with GPay / PhonePe / …" buttons plus "Other UPI app". */
+  function upiPayButtons(link, utrInput) {
+    var apps = installedUpiApps(), box = el("div", { class: "upiapps" });
+    var list = apps ? apps.slice(0, 6) : (/Android/i.test(navigator.userAgent) ? UPI_APPS : []);
+    list.forEach(function (a) { box.appendChild(el("button", { class: "ghost small", text: a.name, onclick: function () { payWithApp(link, a.pkg, utrInput); } })); });
+    box.appendChild(el("button", { class: list.length ? "ghost small" : "primary wide", text: list.length ? "Other UPI app" : "Pay with UPI app", onclick: function () { payWithApp(link, "", utrInput); } }));
+    if (apps && !apps.length) box.appendChild(el("p", { class: "small muted", text: "No UPI app found on this phone. Use the QR code on another phone, or Copy UPI ID." }));
+    return box;
   }
   /** QR code (SVG) for any text, e.g. a UPI link that any UPI app can scan. */
   function qrEl(text) {
@@ -740,8 +789,18 @@
    * GPay/PhonePe often block payment links opened by another app when the receiver is a personal UPI ID.
    * Paying to the copied UPI ID, or scanning the saved QR from the gallery, works.
    */
-  function upiAlt(vpa, name, amount, note) {
+  function upiAlt(vpa, name, amount, note, qrHolder) {
     var box = el("div", { class: "upialt" });
+    if (qrHolder) {
+      var plain = false, tg = el("button", { class: "link small", text: "QR not working? Show QR without amount" });
+      tg.onclick = function () {
+        plain = !plain; qrHolder.innerHTML = "";
+        qrHolder.appendChild(qrEl(plain ? upiLink(vpa, name) : upiLink(vpa, name, amount, note)).firstChild || el("span"));
+        tg.textContent = plain ? "Show QR with amount (" + rupees2(amount) + ")" : "QR not working? Show QR without amount";
+        if (plain) toast("Scan, then type " + rupees2(amount) + " in your UPI app.", 5000);
+      };
+      box.appendChild(el("div", { class: "center" }, tg));
+    }
     box.appendChild(el("div", { class: "upialt-btns" },
       el("button", { class: "ghost small", text: "📋 Copy UPI ID", onclick: function () {
         copyText(vpa).then(function () { toast("UPI ID copied: " + vpa + ". Open your UPI app → Pay UPI ID / number → paste → " + rupees2(amount), 6000); })
@@ -764,10 +823,10 @@
       var link = upiLink(d.upiId, d.name, amt, "SafeShe ride #" + r.id);
       card.appendChild(el("h3", { text: "Pay " + rupees(amt) + " to " + (d.name || "your rider") }));
       card.appendChild(el("p", { class: "small muted", text: "The money goes straight to your rider's UPI account." }));
-      card.appendChild(el("button", { class: "primary wide", text: "Pay " + rupees(amt) + " with UPI app", onclick: function () { openUrl(link); } }));
-      card.appendChild(qrEl(link));
+      card.appendChild(upiPayButtons(link));
+      var qh = qrEl(link); card.appendChild(qh);
       card.appendChild(el("p", { class: "small center" }, "UPI ID: ", el("span", { class: "upiid", text: d.upiId })));
-      card.appendChild(upiAlt(d.upiId, d.name, amt, "SafeShe ride #" + r.id));
+      card.appendChild(upiAlt(d.upiId, d.name, amt, "SafeShe ride #" + r.id, qh));
     } else if (r.payment === "upi") {
       card.appendChild(el("h3", { text: "Pay " + rupees(amt) + " to " + (d.name || "your rider") }));
       card.appendChild(el("p", { class: "small", text: "Ask your rider to show their UPI QR code, or pay in cash." }));
@@ -783,12 +842,13 @@
     settleRide = r; var upi = me && me.driver && me.driver.upiId;
     $("settleStep1").hidden = false; $("settleStep2").hidden = true;
     $("settleAmt").textContent = rupees(r.fare);
-    $("settleQr").innerHTML = ""; $("settleUpi").textContent = "";
+    $("settleQr").innerHTML = ""; $("settleUpi").textContent = ""; $("settleAlt").innerHTML = "";
     if (r.payment === "upi" && upi) {
       $("settleTitle").textContent = "Collect " + rupees(r.fare) + " by UPI";
       $("settleSub").textContent = "Show this QR code to the passenger. They scan it with any UPI app and the money goes straight to your account.";
       $("settleQr").appendChild(qrEl(upiLink(upi, me.name, r.fare, "SafeShe ride #" + r.id)).firstChild || el("span"));
       $("settleUpi").textContent = "Your UPI ID: " + upi;
+      $("settleAlt").appendChild(upiAlt(upi, me.name, r.fare, "SafeShe ride #" + r.id, $("settleQr")));
     } else if (r.payment === "upi") {
       $("settleTitle").textContent = "Collect " + rupees(r.fare);
       $("settleSub").textContent = "Add your UPI ID in My account so passengers can pay you by UPI. For now, collect the fare in cash or from your own UPI app.";
@@ -819,8 +879,9 @@
         var link = upiLink(d.upiId, d.payeeName, share, "SafeShe share ride #" + r.id);
         $("shareQr").appendChild(qrEl(link).firstChild || el("span"));
         $("shareUpi").textContent = "Pay to " + d.upiId + " (" + d.payeeName + ")";
-        $("btnSharePay").hidden = false; $("btnSharePay").onclick = function () { openUrl(link); toast("Complete the payment, then enter the UPI reference here.", 4500); };
-        $("shareAlt").innerHTML = ""; $("shareAlt").appendChild(upiAlt(d.upiId, d.payeeName, share, "SafeShe share ride #" + r.id));
+        $("btnSharePay").hidden = true;
+        $("shareAlt").innerHTML = ""; $("shareAlt").appendChild(upiPayButtons(link, "shareUtr"));
+        $("shareAlt").appendChild(upiAlt(d.upiId, d.payeeName, share, "SafeShe share ride #" + r.id, $("shareQr")));
       } else {
         $("shareAlt").innerHTML = "";
         $("shareUpi").textContent = "The admin hasn't set a UPI ID yet. This amount is added to your SafeShe dues.";
@@ -1021,6 +1082,7 @@
       $("btnPayUpi").hidden = d.toPay <= 0 || !d.upiId;
       $("duesAlt").innerHTML = "";
       if (d.toPay > 0 && d.upiId) $("duesAlt").appendChild(upiAlt(d.upiId, d.payeeName, Math.ceil(d.toPay), "SafeShe commission " + (me ? me.phone : "")));
+      $("btnPayUpi").textContent = "Pay via UPI";
       var info = [];
       if (d.toPay <= 0) info.push("All clear. Thank you!");
       if (d.pending > 0) info.push(rupees2(d.pending) + " waiting for admin verification.");
@@ -1036,11 +1098,12 @@
   $("btnPayUpi").onclick = function () {
     if (!dues || !dues.upiId) return;
     var amt = Math.ceil(dues.toPay);
-    var link = "upi://pay?pa=" + encodeURIComponent(dues.upiId).replace(/%40/g, "@") + "&pn=" + encodeURIComponent(dues.payeeName || "SafeShe") +
-      "&am=" + amt.toFixed(2) + "&cu=INR&tn=" + encodeURIComponent("SafeShe commission " + (me ? me.phone : ""));
+    var link = upiLink(dues.upiId, dues.payeeName, amt, "SafeShe commission " + (me ? me.phone : ""));
     $("utrAmt").value = amt; $("utrForm").hidden = false; $("btnUtrToggle").hidden = true;
-    openUrl(link);
-    toast("Complete the payment in your UPI app, then enter the UPI reference here.", 5000);
+    var box = $("duesApps"); box.innerHTML = ""; box.appendChild(upiPayButtons(link, "utrInput")); box.hidden = false;
+    var qh = qrEl(link); box.appendChild(qh);
+    syncSheet();
+    if (installedUpiApps() === null && !/Android/i.test(navigator.userAgent)) toast("Scan the QR code with your phone's UPI app, then enter the UPI reference here.", 5000);
   };
   $("btnUtrToggle").onclick = function () { $("utrForm").hidden = false; this.hidden = true; syncSheet(); };
   $("btnUtrSubmit").onclick = function () {
@@ -1679,6 +1742,7 @@
         case "playStarted": playing = true; status("recStatus", "Playing…"); break;
         case "playStopped": playing = false; status("recStatus", "Playback stopped."); break;
         case "saveResult": status("recStatus", d.message, d.ok ? "good" : "bad"); toast(d.message); break;
+        case "upiResult": onUpiResult(d); break;
         case "bankWatch": if (d.message) toast(d.message, 7000); else toast(d.on ? "✅ Auto-verify is on for this phone" : "Auto-verify is off on this phone", 3500);
           if (adminCur === "payments") adminTab("payments", true); break;
         case "fileSaved": toast((d.ok ? "✅ " : "⚠️ ") + d.message + (d.ok && /\.png$/i.test(d.name || "") ? ". In your UPI app: Scan → gallery → pick this image." : ""), 7000);

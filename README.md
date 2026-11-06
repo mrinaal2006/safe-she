@@ -31,7 +31,7 @@ or `TILE_URL` (raster) on the server.
 | `api/`, `vercel.json`, `package.json` | Vercel deployment from the repository root |
 | [`safeshe-server/`](safeshe-server/README.md) | Server code (Express + Postgres) and its tests |
 | [`safeshe-android/`](safeshe-android/README.md) | Android app (WebView app + native recording, location, SMS, dialling) |
-| `outputs/SafeShe-4.7.apk` | Latest signed APK. It connects to the built-in server address. |
+| `outputs/SafeShe-4.8.apk` | Latest signed APK. It connects to the built-in server address. |
 
 ## Deploy on Vercel
 1. **Import:** vercel.com → **Add New → Project** → import `safe-she`.
@@ -104,6 +104,13 @@ the pass was active, and then the Minimum is waived (only the platform fee is pa
 
 Riders add their **UPI ID** in rider registration or *My account → Edit my details*. Changing it doesn't need re-approval.
 
+**UPI payment buttons (like a payment gateway).** Every payment screen shows a button for each UPI app on the phone
+(GPay, PhonePe, Paytm, BHIM, … plus **Other UPI app**). In the Android app the UPI app is opened *for a result*, so
+when you finish paying it tells SafeShe success/failure and the **UPI reference is filled in automatically**. In a phone
+browser the buttons open that app directly. Links use the plain NPCI format (`pa`, `pn`, `am`, `cu`, `tn` with only
+letters and digits) without merchant-only fields, which personal UPI IDs can't use. If a QR with the amount is refused,
+tap **QR not working? Show QR without amount**, scan it, and type the amount.
+
 **"Payment declined for security reasons" in GPay/PhonePe?** UPI apps often block payment links that another app opens
 when the receiver is a **personal** UPI ID. Every payment screen therefore also has **📋 Copy UPI ID** (pay to that UPI
 ID inside the UPI app) and **🖼️ Save QR to gallery** (saved to **Pictures/SafeShe**; in the UPI app tap Scan → gallery
@@ -131,7 +138,7 @@ project; SafeShe's code is its own.) Some UPI apps limit "pay" links to personal
 a business/merchant UPI ID works best.
 
 ## Android app
-Install `outputs/SafeShe-4.7.apk`. It connects to **https://safe-she-one.vercel.app** automatically, with no server
+Install `outputs/SafeShe-4.8.apk`. It connects to **https://safe-she-one.vercel.app** automatically, with no server
 address to type. `./safeshe-android/build.sh` builds with that address by default. Set `SAFESHE_SERVER_URL=https://…`
 to build for another server.
 

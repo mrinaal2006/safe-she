@@ -48,12 +48,13 @@ import java.util.Locale;
  */
 public class MainActivity extends Activity {
 
-    static final class BuildInfo { static final String VERSION = "4.7"; }
+    static final class BuildInfo { static final String VERSION = "4.8"; }
 
     private static final int REQ_AUDIO = 1;
     private static final int REQ_LOCATION = 2;
     private static final int REQ_STORAGE = 3;
     private static final int REQ_SMS = 4;
+    private static final int REQ_UPI = 5;
     private static final long LOCATION_TIMEOUT_MS = 10000;
 
     private WebView web;
@@ -186,6 +187,46 @@ public class MainActivity extends Activity {
         } catch (ActivityNotFoundException e) {
             emit("toast", obj("message", "No app can open this link."));
         }
+    }
+
+    // ---------------------------------------------------------------- UPI payments (started for a result, like a payment gateway)
+    /** Installed apps that can pay a upi://pay link: [{pkg, name}]. */
+    private String upiApps() {
+        org.json.JSONArray out = new org.json.JSONArray();
+        try {
+            Intent probe = new Intent(Intent.ACTION_VIEW, Uri.parse("upi://pay?pa=test@upi&pn=Test&am=1.00&cu=INR"));
+            PackageManager pm = getPackageManager();
+            java.util.HashSet<String> seen = new java.util.HashSet<>();
+            for (android.content.pm.ResolveInfo ri : pm.queryIntentActivities(probe, 0)) {
+                String pkg = ri.activityInfo.packageName;
+                if (!seen.add(pkg) || pkg.equals(getPackageName())) continue;
+                out.put(obj("pkg", pkg, "name", String.valueOf(ri.loadLabel(pm))));
+            }
+        } catch (Exception ignored) { }
+        return out.toString();
+    }
+    /** Open the UPI app (a chosen one, or a chooser) so it returns the payment result: status + UPI reference. */
+    private void payUpi(String link, String pkg) {
+        Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(link));
+        try {
+            if (pkg != null && !pkg.isEmpty()) { i.setPackage(pkg); startActivityForResult(i, REQ_UPI); }
+            else startActivityForResult(Intent.createChooser(i, "Pay with"), REQ_UPI);
+        } catch (ActivityNotFoundException e) {
+            emit("upiResult", obj("status", "noapp", "message", "That UPI app isn't installed. Use another app, the QR code or the UPI ID."));
+        }
+    }
+    @Override
+    protected void onActivityResult(int code, int result, Intent data) {
+        super.onActivityResult(code, result, data);
+        if (code != REQ_UPI) return;
+        // UPI apps answer with e.g. "txnId=..&responseCode=00&Status=SUCCESS&txnRef=..&ApprovalRefNo=512345678901".
+        String resp = data == null ? null : data.getStringExtra("response");
+        if (resp == null && data != null && data.getExtras() != null) {
+            StringBuilder b = new StringBuilder();
+            for (String k : data.getExtras().keySet()) { Object v = data.getExtras().get(k); if (v != null) b.append(k).append('=').append(v).append('&'); }
+            resp = b.toString();
+        }
+        emit("upiResult", obj("status", "returned", "response", resp == null ? "" : resp, "ok", result == RESULT_OK));
     }
 
     @Override
@@ -621,6 +662,12 @@ public class MainActivity extends Activity {
             ui.post(new Runnable() { public void run() { MainActivity.this.setBankWatch(server == null ? "" : server, token == null ? "" : token, on); } });
         }
         @JavascriptInterface public String getBankWatch() { return bankWatchState(null).toString(); }
+
+        @JavascriptInterface public String upiApps() { return MainActivity.this.upiApps(); }
+        @JavascriptInterface public void payUpi(final String link, final String pkg) {
+            if (link == null || !link.startsWith("upi://pay?")) return;
+            ui.post(new Runnable() { public void run() { MainActivity.this.payUpi(link, pkg); } });
+        }
 
         /** Copy text (e.g. a UPI ID) to the clipboard. */
         @JavascriptInterface public void copyText(final String text) {
