@@ -10,7 +10,7 @@ A bike, auto and cab booking app with women's-safety features built in. It has t
 | `api/`, `vercel.json`, `package.json` | Vercel deployment from the repository root |
 | [`safeshe-server/`](safeshe-server/README.md) | Server code (Express + Postgres) and its tests |
 | [`safeshe-android/`](safeshe-android/README.md) | Android app (WebView app + native recording, location, SMS, dialling) |
-| `outputs/SafeShe-3.2.apk` | Latest signed APK. It asks for the server address on first launch. |
+| `outputs/SafeShe-3.3.apk` | Latest signed APK. It asks for the server address on first launch. |
 
 ## Deploy on Vercel
 1. **Import:** vercel.com → **Add New → Project** → import `safe-she`.
@@ -39,7 +39,7 @@ Without the key, the server runs in **test mode**: no SMS is sent, and the lates
 If you registered your own DLT OTP template with 2Factor, set its name as `TWOFACTOR_TEMPLATE`.
 
 ## Android app
-Install `outputs/SafeShe-3.2.apk` and enter `https://<project>.vercel.app` on first launch, or build it with the
+Install `outputs/SafeShe-3.3.apk` and enter `https://<project>.vercel.app` on first launch, or build it with the
 address built in: `SAFESHE_SERVER_URL=https://<project>.vercel.app ./safeshe-android/build.sh`.
 
 ## Develop / test
