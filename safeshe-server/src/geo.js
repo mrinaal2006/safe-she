@@ -59,10 +59,18 @@ function createGeo(cfg, log) {
     return cached(key, 24 * 3600_000, async () => {
       let out = [], failures = 0;
       try {
-        let p = `${cfg.photonUrl}/api/?limit=${suggest ? 7 : 12}&lang=en&q=${encodeURIComponent(q)}`;
-        if (near) p += `&lat=${near.lat}&lon=${near.lng}&location_bias_scale=0.4`;
-        const fc = await getJson(p, suggest ? 5000 : 8000);
-        out = (fc.features || []).map(f => photonPlace(f, q));
+        // Two lookups in parallel: places near the user, and the best-known matches anywhere (so "India Gate"
+        // from Bengaluru still finds New Delhi). Mix them: nearby first, then famous/global ones.
+        const base = `${cfg.photonUrl}/api/?limit=${suggest ? 6 : 10}&lang=en&q=${encodeURIComponent(q)}`;
+        const tasks = [getJson(base, suggest ? 5000 : 8000)];
+        if (near) tasks.push(getJson(`${base}&lat=${near.lat}&lon=${near.lng}&zoom=11&location_bias_scale=0.5`, suggest ? 5000 : 8000));
+        const [global, local] = await Promise.allSettled(tasks);
+        const g = global.status === 'fulfilled' ? (global.value.features || []).map(f => photonPlace(f, q)) : [];
+        const l = local && local.status === 'fulfilled' ? (local.value.features || []).map(f => photonPlace(f, q)) : [];
+        if (global.status !== 'fulfilled' && (!local || local.status !== 'fulfilled')) throw global.reason || new Error('search failed');
+        const nearbyKm = 50;
+        const lNear = near ? l.filter(o => haversineKm(near, o) <= nearbyKm) : l;
+        out = [...lNear.slice(0, suggest ? 4 : 6), ...g.slice(0, suggest ? 4 : 6), ...l, ...g];
       } catch (e) { failures++; log(`[geo] photon search failed: ${e.message}`); }
       if (!out.length && !suggest) {
         try {
@@ -76,7 +84,8 @@ function createGeo(cfg, log) {
       if (!out.length && failures >= (suggest ? 1 : 2)) throw Object.assign(new Error('Place search is unavailable right now. Choose the destination on the map.'), { status: 503 });
       // De-duplicate near-identical results.
       const seen = new Set();
-      out = out.filter(o => { const k = o.name.toLowerCase() + '|' + o.lat.toFixed(3) + ',' + o.lng.toFixed(3); if (seen.has(k)) return false; seen.add(k); return true; });
+      out = out.filter(o => { const k = o.name.toLowerCase() + '|' + o.lat.toFixed(3) + ',' + o.lng.toFixed(3); if (seen.has(k)) return false; seen.add(k); return true; })
+        .slice(0, suggest ? 8 : 15);
       if (near) out.forEach(o => { o.distanceKm = +haversineKm(near, o).toFixed(1); });
       return out;
     });
