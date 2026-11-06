@@ -77,7 +77,10 @@ function createOtpService(db, cfg, log) {
     try {
       const r = await fetch(`https://2factor.in/API/V1/${encodeURIComponent(cfg.twoFactorKey)}/BAL/SMS`, { signal: AbortSignal.timeout(10000) });
       const body = await r.json().catch(() => ({}));
-      if (body.Status === 'Success') return { provider: '2Factor.in', configured: true, ok: true, balance: body.Details, message: 'SMS sending is active. Balance: ' + body.Details + ' SMS.' };
+      if (body.Status === 'Success') {
+        const n = Number(body.Details), bal = Number.isFinite(n) ? String(Math.floor(n)) : String(body.Details);
+        return { provider: '2Factor.in', configured: true, ok: true, balance: bal, message: 'SMS sending is active. Balance: ' + bal + ' SMS.' };
+      }
       return { provider: '2Factor.in', configured: true, ok: false, message: '2Factor rejected the API key: ' + (body.Details || 'HTTP ' + r.status) + '. Check TWOFACTOR_API_KEY.' };
     } catch (e) {
       return { provider: '2Factor.in', configured: true, ok: false, message: 'Could not reach 2Factor.in: ' + e.message };
