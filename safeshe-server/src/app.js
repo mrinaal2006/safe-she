@@ -11,6 +11,7 @@ const { createDb } = require('./db');
 const sec = require('./security');
 const { createOtpService } = require('./otp');
 const { createGeo, haversineKm } = require('./geo');
+const pricingEngine = require('./pricing');
 
 const ACTIVE = ['requested', 'accepted', 'arrived', 'started'];
 const VEHICLES = ['bike', 'auto', 'cab', 'pink'];
@@ -76,9 +77,6 @@ function createApp(cfg) {
         log('[admin] WARNING: no admin account. Set ADMIN_PASSWORD (and optionally ADMIN_USERNAME) and redeploy.');
       }
       if (otp.testMode) log('[otp] TEST MODE: no TWOFACTOR_API_KEY set, so OTPs are not sent by SMS (see admin panel → Settings).');
-      // Default commission (once): ₹5 bike, ₹6 auto, ₹8 cab / pink cab per completed ride. Editable in Admin → Fares.
-      if (await db.exec("INSERT INTO kv (key, value) VALUES ('commission_seeded', '1') ON CONFLICT (key) DO NOTHING"))
-        await db.exec("UPDATE fares SET commission_type = 'flat', commission_value = CASE vehicle WHEN 'bike' THEN 5 WHEN 'auto' THEN 6 ELSE 8 END WHERE commission_value = 0");
     })().catch(e => { initP = null; throw e; });
     return initP;
   }
@@ -148,9 +146,17 @@ function createApp(cfg) {
   }
   const fares = () => db.q('SELECT * FROM fares ORDER BY sort');
 
-  // ---------------- commission (platform fee) owed by riders to the admin
+  // ---------------- pricing settings (night premium, pickup surcharge, gridlock, rider tiers)
   const round2 = n => Math.round(n * 100) / 100;
-  const commissionFor = (f, fare) => !f ? 0 : round2(Math.max(0, f.commission_type === 'percent' ? fare * f.commission_value / 100 : f.commission_value));
+  async function pricing() {
+    const r = await db.one("SELECT value FROM kv WHERE key = 'pricing'");
+    let stored = null; try { stored = r ? JSON.parse(r.value) : null; } catch (e) { stored = null; }
+    return pricingEngine.normalizePricing(stored);
+  }
+  /** The rider's pass covering time `at`, if any. */
+  const activePass = (driverId, at) => db.one('SELECT * FROM driver_passes WHERE driver_id = $1 AND starts_at <= $2 AND ends_at > $2 ORDER BY ends_at DESC LIMIT 1', [driverId, at]);
+
+  // ---------------- what riders owe the admin: platform fees they collected + tier fees (per ride or passes)
   const UPI_RE = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,64}$/;
   async function paymentSettings() {
     const rows = await db.q("SELECT key, value FROM kv WHERE key IN ('pay_upi', 'pay_name', 'pay_limit')");
@@ -159,13 +165,18 @@ function createApp(cfg) {
   }
   async function duesFor(driverId) {
     const r = await db.one(`SELECT
-      (SELECT COALESCE(SUM(commission), 0) FROM rides WHERE driver_id = $1 AND status = 'completed') AS charged,
+      (SELECT COALESCE(SUM(commission), 0) FROM rides WHERE driver_id = $1 AND status = 'completed') AS ride_fees,
+      (SELECT COALESCE(SUM(platform_fee), 0) FROM rides WHERE driver_id = $1 AND status = 'completed') AS platform_fees,
+      (SELECT COALESCE(SUM(price), 0) FROM driver_passes WHERE driver_id = $1) AS passes,
       (SELECT COALESCE(SUM(amount), 0) FROM commission_payments WHERE driver_id = $1 AND status = 'confirmed') AS paid,
       (SELECT COALESCE(SUM(amount), 0) FROM commission_payments WHERE driver_id = $1 AND status = 'pending') AS pending`, [driverId]);
-    const due = round2(Math.max(0, r.charged - r.paid));
-    return { charged: round2(r.charged), paid: round2(r.paid), pending: round2(r.pending), due, toPay: round2(Math.max(0, due - r.pending)) };
+    const charged = r.ride_fees + r.platform_fees + r.passes;
+    const due = round2(Math.max(0, charged - r.paid));
+    return { charged: round2(charged), rideFees: round2(r.ride_fees), platformFees: round2(r.platform_fees), passes: round2(r.passes),
+      paid: round2(r.paid), pending: round2(r.pending), due, toPay: round2(Math.max(0, due - r.pending)) };
   }
-  const fareFor = (f, km, min) => Math.round(Math.max(f.min_fare, f.base + f.per_km * km + f.per_min * min));
+  /** Upfront fare breakdown for a fares row at time `at` (pickup surcharge / traffic minutes added later). */
+  const quoteFare = (f, km, at, P, extra = {}) => pricingEngine.computeFare(f, { km, night: pricingEngine.isNight(at, P), ...extra }, P);
   const shareUrl = token => (cfg.publicUrl || '') + '/t/' + token;
 
   const RIDE_SELECT = `SELECT r.*, p.name AS p_name, p.phone AS p_phone,
@@ -195,7 +206,15 @@ function createApp(cfg) {
       } : null,
     };
     if (viewer === 'passenger' || viewer === 'admin') { out.otp = r.otp; out.shareUrl = shareUrl(r.share_token); out.shareToken = r.share_token; }
-    if (viewer === 'driver' || viewer === 'admin') out.commission = r.commission || 0;
+    // Fare details: upfront fare at booking; the final fare can add a long-pickup surcharge and gridlock time.
+    out.upfrontFare = r.upfront_fare != null ? r.upfront_fare : r.fare;
+    out.night = !!r.night; out.platformFee = r.platform_fee || 0; out.pickupSurcharge = r.pickup_surcharge || 0;
+    out.breakdown = r.breakdown || null;
+    if (r.gridlock) out.trafficMin = round2((r.gridlock.sec || 0) / 60);
+    if (viewer === 'driver' || viewer === 'admin') {
+      out.commission = r.commission || 0; out.tier = r.tier || null;
+      out.driverKeeps = round2(r.fare - (r.platform_fee || 0)); // platform fee is passed to SafeShe; pickup surcharge stays 100% with the rider
+    }
     return out;
   }
 
@@ -206,9 +225,16 @@ function createApp(cfg) {
     await emit('admins', 'admin:ride', { id: r.id, status: r.status });
   }
   async function updateDriverLocation(userId, p) {
-    await db.exec('UPDATE drivers SET lat = $1, lng = $2, loc_at = $3 WHERE user_id = $4', [p.lat, p.lng, now(), userId]);
-    const r = await db.one("SELECT id, passenger_id FROM rides WHERE driver_id = $1 AND status IN ('accepted','arrived','started') LIMIT 1", [userId]);
-    if (r) await emit('user:' + r.passenger_id, 'ride:driver_location', { rideId: r.id, lat: p.lat, lng: p.lng, at: now() });
+    const t = now();
+    await db.exec('UPDATE drivers SET lat = $1, lng = $2, loc_at = $3 WHERE user_id = $4', [p.lat, p.lng, t, userId]);
+    const r = await db.one("SELECT id, passenger_id, status, gridlock FROM rides WHERE driver_id = $1 AND status IN ('accepted','arrived','started') LIMIT 1", [userId]);
+    if (!r) return;
+    if (r.status === 'started') {
+      // Gridlock trigger: bill per-minute only while slower than the threshold for long enough.
+      const g = pricingEngine.trackGridlock(r.gridlock, p, t, await pricing(), haversineKm);
+      await db.exec("UPDATE rides SET gridlock = $1 WHERE id = $2 AND status = 'started'", [JSON.stringify(g), r.id]);
+    }
+    await emit('user:' + r.passenger_id, 'ride:driver_location', { rideId: r.id, lat: p.lat, lng: p.lng, at: t });
   }
 
   // ---------------------------------------------------------------- dispatch (ride matching)
@@ -221,20 +247,24 @@ function createApp(cfg) {
     if (vehicle === 'pink') return d.vehicle_type === 'cab' && d.gender === 'female';
     return d.vehicle_type === vehicle;
   }
-  function offerView(r, d) {
-    return { rideId: r.id, vehicle: r.vehicle, fare: r.fare, payment: r.payment, distanceKm: +r.distance_km.toFixed(1), durationMin: Math.round(r.duration_min),
+  function offerView(r, d, P) {
+    const pickupKm = d && d.lat != null ? +haversineKm({ lat: r.pickup_lat, lng: r.pickup_lng }, d).toFixed(1) : null;
+    const surcharge = P && pickupKm != null ? pricingEngine.pickupSurcharge(pickupKm, P) : 0;
+    const fare = Math.round(r.fare + surcharge);
+    return { rideId: r.id, vehicle: r.vehicle, fare, payment: r.payment, distanceKm: +r.distance_km.toFixed(1), durationMin: Math.round(r.duration_min),
       pickup: { lat: r.pickup_lat, lng: r.pickup_lng, name: r.pickup_name }, drop: { lat: r.drop_lat, lng: r.drop_lng, name: r.drop_name },
-      pickupKm: d && d.lat != null ? +haversineKm({ lat: r.pickup_lat, lng: r.pickup_lng }, d).toFixed(1) : null,
-      expiresAt: r.requested_at + cfg.searchMs };
+      pickupKm, pickupSurcharge: surcharge, night: !!r.night, platformFee: r.platform_fee || 0,
+      youKeep: round2(fare - (r.platform_fee || 0)), expiresAt: r.requested_at + cfg.searchMs };
   }
   async function dispatch(r, drivers) {
     if (!r || r.status !== 'requested') return;
     const pick = { lat: r.pickup_lat, lng: r.pickup_lng };
     const cands = (drivers || await availableDrivers()).filter(d => matches(d, r.vehicle) && haversineKm(pick, d) <= cfg.radiusKm)
       .sort((a, b) => haversineKm(pick, a) - haversineKm(pick, b));
+    const P = cands.length ? await pricing() : null;
     for (const d of cands) {
       const ins = await db.exec('INSERT INTO ride_offers (ride_id, driver_id, offered_at) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', [r.id, d.user_id, now()]);
-      if (ins) await emit('user:' + d.user_id, 'ride:offer', offerView(r, d));
+      if (ins) await emit('user:' + d.user_id, 'ride:offer', offerView(r, d, P));
     }
   }
   async function closeOffers(rideId) {
@@ -243,7 +273,8 @@ function createApp(cfg) {
   async function openOffersFor(driverId) {
     const d = await driverRow(driverId);
     const rows = await db.q("SELECT r.* FROM ride_offers o JOIN rides r ON r.id = o.ride_id WHERE o.driver_id = $1 AND NOT o.declined AND r.status = 'requested'", [driverId]);
-    return rows.map(r => offerView(r, d));
+    const P = await pricing();
+    return rows.map(r => offerView(r, d, P));
   }
   /** Periodic work without a background process: runs at most once per TICK_MS across all instances. */
   async function tick(force) {
@@ -395,13 +426,19 @@ function createApp(cfg) {
     if (!a || !b) throw httpError(400, 'Choose pickup and drop locations.');
     if (haversineKm(a, b) < 0.1) throw httpError(400, 'Pickup and drop are too close.');
     if (haversineKm(a, b) > 150) throw httpError(400, 'Rides are limited to 150 km.');
-    const [rt, online, fs] = await Promise.all([geo.route(a, b), availableDrivers(), fares()]);
+    const [rt, online, fs, P] = await Promise.all([geo.route(a, b), availableDrivers(), fares(), pricing()]);
+    const t = now(), night = pricingEngine.isNight(t, P);
     const opts = fs.filter(f => f.active).map(f => {
       const near = online.filter(d => matches(d, f.vehicle) && haversineKm(a, d) <= cfg.radiusKm);
-      const eta = near.length ? Math.max(1, Math.round(Math.min(...near.map(d => haversineKm(a, d))) / 18 * 60)) : null;
-      return { vehicle: f.vehicle, name: f.name, fare: fareFor(f, rt.km, rt.min), etaMin: eta, ridersNearby: near.length };
+      const nearestKm = near.length ? Math.min(...near.map(d => haversineKm(a, d))) : null;
+      const eta = nearestKm != null ? Math.max(1, Math.round(nearestKm / 18 * 60)) : null;
+      const b = quoteFare(f, rt.km, t, P);
+      return { vehicle: f.vehicle, name: f.name, fare: b.total, breakdown: b, perMin: f.per_min, etaMin: eta, ridersNearby: near.length,
+        maxPickupSurcharge: pricingEngine.pickupSurcharge(cfg.radiusKm, P) };
     });
-    res.json({ km: +rt.km.toFixed(2), min: Math.round(rt.min), approx: rt.approx, points: rt.points, options: opts });
+    res.json({ km: +rt.km.toFixed(2), min: Math.round(rt.min), approx: rt.approx, points: rt.points, options: opts, night,
+      nightMultiplier: P.night.multiplier, gridlock: { speedKmh: P.gridlock.speedKmh, minMinutes: P.gridlock.minMinutes },
+      pickup: { freeKm: P.pickup.freeKm, perKm: P.pickup.perKm } });
   }));
   app.post('/api/rides', auth('passenger'), wrap(async (req, res) => {
     const u = req.user;
@@ -412,12 +449,13 @@ function createApp(cfg) {
     const f = (await fares()).find(x => x.vehicle === vehicle && x.active);
     if (!f) throw httpError(400, 'This ride type is not available.');
     const payment = req.body.payment === 'upi' ? 'upi' : 'cash';
-    const rt = await geo.route(a, b);
+    const [rt, P] = await Promise.all([geo.route(a, b), pricing()]);
+    const t = now(), bd = quoteFare(f, rt.km, t, P);
     const row = await db.one(`INSERT INTO rides (passenger_id, vehicle, status, pickup_lat, pickup_lng, pickup_name, drop_lat, drop_lng, drop_name,
-        distance_km, duration_min, route_approx, fare, payment, otp, share_token, requested_at)
-      VALUES ($1,$2,'requested',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+        distance_km, duration_min, route_approx, fare, payment, otp, share_token, requested_at, upfront_fare, platform_fee, night, breakdown)
+      VALUES ($1,$2,'requested',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$12,$17,$18,$19) RETURNING id`,
       [u.id, vehicle, a.lat, a.lng, str(req.body.pickup.name, 200) || 'Pickup point', b.lat, b.lng, str(req.body.drop.name, 200) || 'Drop point',
-        rt.km, rt.min, rt.approx, fareFor(f, rt.km, rt.min), payment, sec.digits(4), sec.token(12), now()]);
+        rt.km, rt.min, rt.approx, bd.total, payment, sec.digits(4), sec.token(12), t, bd.platformFee, bd.night, JSON.stringify(bd)]);
     log(`[ride ${row.id}] requested by user ${u.id} (${vehicle})`);
     await dispatch(await db.one('SELECT * FROM rides WHERE id = $1', [row.id]));
     await pushRide(row.id);
@@ -496,10 +534,19 @@ function createApp(cfg) {
     const r = await db.one('SELECT * FROM rides WHERE id = $1', [+req.params.id || 0]);
     if (!r) throw httpError(404, 'Ride not found.');
     if (!matches({ ...d, gender: req.user.gender }, r.vehicle)) throw httpError(403, 'This ride needs a different vehicle type.');
+    // Long-pickup surcharge (100% to the rider) and the rider's plan (pass or pay-per-ride) are fixed at acceptance.
+    const P = await pricing(), t = now();
+    const f = (await fares()).find(x => x.vehicle === r.vehicle) || { base: r.fare, per_km: 0, per_min: 0 };
+    const pickupKm = d.lat != null ? round2(haversineKm({ lat: r.pickup_lat, lng: r.pickup_lng }, d)) : 0;
+    const surcharge = pricingEngine.pickupSurcharge(pickupKm, P);
+    const bd = pricingEngine.computeFare(f, { km: r.distance_km, night: r.night, pickupSurcharge: surcharge }, P);
+    const pass = await activePass(req.user.id, t);
     // Atomic: only the first rider to accept gets the ride.
-    const ch = await db.exec("UPDATE rides SET status = 'accepted', driver_id = $1, accepted_at = $2 WHERE id = $3 AND status = 'requested'", [req.user.id, now(), r.id]);
+    const ch = await db.exec(`UPDATE rides SET status = 'accepted', driver_id = $1, accepted_at = $2, pickup_km = $4, pickup_surcharge = $5,
+        fare = $6, breakdown = $7, tier = $8 WHERE id = $3 AND status = 'requested'`,
+      [req.user.id, t, r.id, pickupKm, surcharge, bd.total, JSON.stringify(bd), pass ? pass.kind : 'perRide']);
     if (!ch) throw httpError(409, 'Sorry, this ride was taken by another rider or cancelled.');
-    log(`[ride ${r.id}] accepted by rider ${req.user.id}`);
+    log(`[ride ${r.id}] accepted by rider ${req.user.id}${surcharge ? ` (pickup ${pickupKm} km, +₹${surcharge})` : ''}`);
     await closeOffers(r.id); await pushRide(r.id);
     res.json({ ride: rideView(await getRide(r.id), 'driver') });
   }));
@@ -508,9 +555,18 @@ function createApp(cfg) {
     if (!r || r.driver_id !== req.user.id) throw httpError(404, 'Ride not found.');
     if (!from.includes(r.status)) throw httpError(409, `Ride is ${r.status}.`);
     if (otpCheck && !sec.safeEqual(str(req.body.otp, 4), r.otp)) throw httpError(400, 'Wrong OTP. Ask the passenger for the 4-digit ride OTP.');
-    // On completion, record the platform commission for this ride (current rate for its vehicle type).
-    const commission = to === 'completed' ? commissionFor((await fares()).find(f => f.vehicle === r.vehicle), r.fare) : r.commission;
-    const ch = await db.exec(`UPDATE rides SET status = $1, ${col} = $2, commission = $5 WHERE id = $3 AND status = ANY($4)`, [to, now(), r.id, from, commission]);
+    // On completion: final fare = upfront fare + long-pickup surcharge + gridlock minutes; tier fee for pay-per-ride riders.
+    let fare = r.fare, breakdown = r.breakdown, commission = r.commission || 0;
+    if (to === 'completed') {
+      const P = await pricing();
+      const f = (await fares()).find(x => x.vehicle === r.vehicle) || { base: r.fare, per_km: 0, per_min: 0 };
+      const trafficMin = round2(((r.gridlock && r.gridlock.sec) || 0) / 60);
+      const bd = pricingEngine.computeFare(f, { km: r.distance_km, night: r.night, pickupSurcharge: r.pickup_surcharge || 0, trafficMin }, P);
+      fare = bd.total; breakdown = bd;
+      commission = (r.tier || 'perRide') === 'perRide' ? P.tiers.perRide.fee : 0;
+    }
+    const ch = await db.exec(`UPDATE rides SET status = $1, ${col} = $2, commission = $5, fare = $6, breakdown = $7 WHERE id = $3 AND status = ANY($4)`,
+      [to, now(), r.id, from, commission, fare, breakdown ? JSON.stringify(breakdown) : null]);
     if (!ch) throw httpError(409, 'The ride changed. Please refresh.');
     log(`[ride ${r.id}] ${to}`);
     await pushRide(r.id);
@@ -525,11 +581,42 @@ function createApp(cfg) {
     const [dues, ps, payments, recent] = await Promise.all([
       duesFor(req.user.id), paymentSettings(),
       db.q('SELECT id, amount, utr, status, created_at, reviewed_at, note FROM commission_payments WHERE driver_id = $1 ORDER BY id DESC LIMIT 20', [req.user.id]),
-      db.q("SELECT id, vehicle, fare, commission, completed_at FROM rides WHERE driver_id = $1 AND status = 'completed' ORDER BY id DESC LIMIT 20", [req.user.id]),
+      db.q("SELECT id, vehicle, fare, commission, platform_fee, tier, completed_at FROM rides WHERE driver_id = $1 AND status = 'completed' ORDER BY id DESC LIMIT 20", [req.user.id]),
     ]);
     res.json({ ...dues, upiId: ps.upiId, payeeName: ps.payeeName, duesLimit: ps.duesLimit,
       payments: payments.map(p => ({ id: p.id, amount: p.amount, utr: p.utr, status: p.status, createdAt: p.created_at, reviewedAt: p.reviewed_at, note: p.note })),
-      rides: recent.map(r => ({ id: r.id, vehicle: r.vehicle, fare: r.fare, commission: r.commission, completedAt: r.completed_at })) });
+      rides: recent.map(r => ({ id: r.id, vehicle: r.vehicle, fare: r.fare, commission: r.commission, platformFee: r.platform_fee, tier: r.tier, completedAt: r.completed_at })) });
+  }));
+
+  // ---------------- rider plans: Tier 1 pay-per-ride (default), Tier 2 half-day pass, Tier 3 full-day pass
+  async function planView(driverId) {
+    const P = await pricing(), t = now();
+    const pass = await activePass(driverId, t);
+    const day = new Date(); day.setHours(0, 0, 0, 0);
+    const today = await db.one(`SELECT COUNT(*) AS rides, COALESCE(SUM(fare - platform_fee), 0) AS kept, COALESCE(SUM(commission), 0) AS ride_fees
+      FROM rides WHERE driver_id = $1 AND status = 'completed' AND completed_at >= $2`, [driverId, day.getTime()]);
+    return { tiers: P.tiers, active: pass ? { kind: pass.kind, name: P.tiers[pass.kind].name, price: pass.price, startsAt: pass.starts_at, endsAt: pass.ends_at } : null,
+      current: pass ? pass.kind : 'perRide', today: { rides: today.rides, kept: round2(today.kept), rideFees: round2(today.ride_fees) } };
+  }
+  app.get('/api/driver/plan', auth('driver'), wrap(async (req, res) => res.json(await planView(req.user.id))));
+  app.post('/api/driver/pass', auth('driver'), wrap(async (req, res) => {
+    await requireApproved(req.user);
+    const kind = req.body.kind;
+    if (kind !== 'half' && kind !== 'full') throw httpError(400, 'Choose the Half-Day or Full-Day pass.');
+    const P = await pricing(), t = now();
+    const cur = await activePass(req.user.id, t);
+    if (cur) throw httpError(409, `You already have an active ${P.tiers[cur.kind].name} until ${new Date(cur.ends_at).toLocaleString('en-IN', { timeZone: P.night.timeZone, hour: 'numeric', minute: '2-digit', day: 'numeric', month: 'short' })}.`);
+    const tier = P.tiers[kind];
+    await db.exec('INSERT INTO driver_passes (driver_id, kind, price, starts_at, ends_at, created_at) VALUES ($1,$2,$3,$4,$5,$4)',
+      [req.user.id, kind, tier.price, t, t + tier.hours * 3600_000]);
+    log(`[rider ${req.user.id}] bought ${kind} pass ₹${tier.price}`);
+    await emit('admins', 'admin:pass', { driverId: req.user.id, name: req.user.name, kind, price: tier.price });
+    res.json(await planView(req.user.id));
+  }));
+  app.get('/api/pricing', wrap(async (req, res) => {
+    const P = await pricing();
+    res.json({ night: P.night, nightNow: pricingEngine.isNight(now(), P), pickup: P.pickup, gridlock: P.gridlock,
+      fares: (await fares()).filter(f => f.active).map(f => ({ vehicle: f.vehicle, name: f.name, base: f.base, includedKm: f.included_km, perKm: f.per_km, perMin: f.per_min, platformFee: f.platform_fee, minFare: f.min_fare })) });
   }));
   app.post('/api/driver/payments', auth('driver'), wrap(async (req, res) => {
     const amount = num(req.body.amount, 1, 100000);
@@ -582,12 +669,20 @@ function createApp(cfg) {
       (SELECT COUNT(*) FROM rides WHERE status = 'completed' AND completed_at >= $1) AS completed_today,
       (SELECT COALESCE(SUM(fare), 0) FROM rides WHERE status = 'completed' AND completed_at >= $1) AS revenue_today,
       (SELECT COUNT(*) FROM sos WHERE resolved_at IS NULL) AS open_sos,
-      (SELECT COALESCE(SUM(commission), 0) FROM rides WHERE status = 'completed' AND completed_at >= $1) AS commission_today,
-      (SELECT COALESCE(SUM(commission), 0) FROM rides WHERE status = 'completed') - (SELECT COALESCE(SUM(amount), 0) FROM commission_payments WHERE status = 'confirmed') AS commission_due,
+      (SELECT COALESCE(SUM(commission + platform_fee), 0) FROM rides WHERE status = 'completed' AND completed_at >= $1)
+        + (SELECT COALESCE(SUM(price), 0) FROM driver_passes WHERE created_at >= $1) AS commission_today,
+      (SELECT COALESCE(SUM(platform_fee), 0) FROM rides WHERE status = 'completed' AND completed_at >= $1) AS platform_fees_today,
+      (SELECT COALESCE(SUM(commission), 0) FROM rides WHERE status = 'completed' AND completed_at >= $1) AS ride_fees_today,
+      (SELECT COUNT(*) FROM driver_passes WHERE created_at >= $1) AS passes_today,
+      (SELECT COALESCE(SUM(price), 0) FROM driver_passes WHERE created_at >= $1) AS pass_revenue_today,
+      (SELECT COALESCE(SUM(commission + platform_fee), 0) FROM rides WHERE status = 'completed') + (SELECT COALESCE(SUM(price), 0) FROM driver_passes)
+        - (SELECT COALESCE(SUM(amount), 0) FROM commission_payments WHERE status = 'confirmed') AS commission_due,
       (SELECT COUNT(*) FROM commission_payments WHERE status = 'pending') AS payments_pending`, [d0]);
     res.json({ passengers: s.passengers, riders: s.riders, ridersOnline: (await availableDrivers()).length, ridersPending: s.riders_pending,
       activeRides: s.active_rides, ridesToday: s.rides_today, completedToday: s.completed_today, revenueToday: s.revenue_today, openSos: s.open_sos, otpTestMode: otp.testMode,
-      commissionToday: round2(s.commission_today), commissionDue: round2(Math.max(0, s.commission_due)), paymentsPending: s.payments_pending });
+      commissionToday: round2(s.commission_today), platformFeesToday: round2(s.platform_fees_today), rideFeesToday: round2(s.ride_fees_today),
+      passesToday: s.passes_today, passRevenueToday: round2(s.pass_revenue_today),
+      commissionDue: round2(Math.max(0, s.commission_due)), paymentsPending: s.payments_pending });
   }));
   app.get('/api/admin/riders', admin, wrap(async (req, res) => {
     const st = ['pending', 'approved', 'rejected'].includes(req.query.status) ? req.query.status : null;
@@ -658,16 +753,21 @@ function createApp(cfg) {
     const list = Array.isArray(req.body.fares) ? req.body.fares : [];
     for (const f of list) {
       if (!VEHICLES.includes(f.vehicle)) continue;
-      const vals = [num(f.base, 0, 10000), num(f.per_km, 0, 1000), num(f.per_min, 0, 1000), num(f.min_fare, 0, 10000)];
+      const vals = [num(f.base, 0, 10000), num(f.per_km, 0, 1000), num(f.per_min, 0, 1000), num(f.min_fare == null ? 0 : f.min_fare, 0, 10000),
+        num(f.included_km == null ? 0 : f.included_km, 0, 50), num(f.platform_fee == null ? 0 : f.platform_fee, 0, 1000)];
       if (vals.some(v => v == null)) throw httpError(400, `Invalid fare values for ${f.vehicle}.`);
-      const ctype = f.commission_type === 'percent' ? 'percent' : 'flat';
-      const cval = num(f.commission_value == null ? 0 : f.commission_value, 0, ctype === 'percent' ? 50 : 1000);
-      if (cval == null) throw httpError(400, `Invalid commission for ${f.vehicle} (${ctype === 'percent' ? '0–50 %' : '₹0–1000'}).`);
-      await db.exec('UPDATE fares SET name=$1, base=$2, per_km=$3, per_min=$4, min_fare=$5, active=$6, commission_type=$7, commission_value=$8 WHERE vehicle=$9',
-        [str(f.name, 30) || f.vehicle, ...vals, !!f.active, ctype, cval, f.vehicle]);
+      await db.exec('UPDATE fares SET name=$1, base=$2, per_km=$3, per_min=$4, min_fare=$5, included_km=$6, platform_fee=$7, active=$8 WHERE vehicle=$9',
+        [str(f.name, 30) || f.vehicle, ...vals, !!f.active, f.vehicle]);
     }
     log('[admin] fares updated');
     res.json({ fares: await fares() });
+  }));
+  app.get('/api/admin/pricing', admin, wrap(async (req, res) => res.json(await pricing())));
+  app.put('/api/admin/pricing', admin, wrap(async (req, res) => {
+    const v = pricingEngine.validatePricing(req.body);
+    await db.exec("INSERT INTO kv (key, value) VALUES ('pricing', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", [JSON.stringify(v)]);
+    log('[admin] pricing settings updated');
+    res.json(v);
   }));
 
   // ---------------- admin: UPI settings, commission dues, payment review
@@ -685,7 +785,8 @@ function createApp(cfg) {
   }));
   app.get('/api/admin/dues', admin, wrap(async (req, res) => {
     const rows = await db.q(`SELECT u.id, u.name, u.phone, d.vehicle_type, d.plate,
-        COALESCE((SELECT SUM(commission) FROM rides r WHERE r.driver_id = u.id AND r.status = 'completed'), 0) AS charged,
+        COALESCE((SELECT SUM(commission + platform_fee) FROM rides r WHERE r.driver_id = u.id AND r.status = 'completed'), 0)
+          + COALESCE((SELECT SUM(price) FROM driver_passes x WHERE x.driver_id = u.id), 0) AS charged,
         COALESCE((SELECT SUM(amount) FROM commission_payments p WHERE p.driver_id = u.id AND p.status = 'confirmed'), 0) AS paid,
         COALESCE((SELECT SUM(amount) FROM commission_payments p WHERE p.driver_id = u.id AND p.status = 'pending'), 0) AS pending
       FROM users u JOIN drivers d ON d.user_id = u.id ORDER BY u.id DESC LIMIT 500`);

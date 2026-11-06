@@ -95,6 +95,7 @@
     "admin:ride": function () { adminLive("ride"); },
     "admin:driver_pending": function () { toast("New rider waiting for approval"); adminLive("rider"); },
     "admin:payment": function (p) { toast("💰 " + (p.name || "A rider") + " reported a commission payment of " + rupees(p.amount), 5000); adminLive("payment"); },
+    "admin:pass": function (p) { toast("🎫 " + (p.name || "A rider") + " bought a " + (p.kind === "full" ? "Full-Day" : "Half-Day") + " Pass (" + rupees(p.price) + ")", 5000); adminLive("payment"); },
     "payment:update": function (p) { toast(p.status === "confirmed" ? "✅ Your payment of " + rupees(p.amount) + " was confirmed" : "❌ Your payment of " + rupees(p.amount) + " was not verified. Check the UPI reference.", 6000); loadDues(); }
   };
   function connectSocket() { // name kept for the callers; starts the event poller
@@ -458,6 +459,27 @@
     var c = quote.options.find(function (o) { return o.vehicle === chosen; });
     $("btnBook").disabled = !c;
     $("btnBook").textContent = c ? "Book " + c.name + " · " + rupees(c.fare) : "Book";
+    var fb = $("fareBreak"); fb.innerHTML = "";
+    if (c && c.breakdown) {
+      fb.appendChild(fareTable(c.breakdown, "Upfront fare"));
+      var notes = [];
+      if (quote.gridlock) notes.push("+ " + rupees2(c.perMin) + "/min only if stuck in traffic (below " + quote.gridlock.speedKmh + " km/h for over " + quote.gridlock.minMinutes + " min).");
+      if (c.maxPickupSurcharge > 0 && quote.pickup) notes.push("+ " + rupees2(quote.pickup.perKm) + "/km if your rider comes from more than " + quote.pickup.freeKm + " km away (up to " + rupees2(c.maxPickupSurcharge) + "), paid to the rider.");
+      if (quote.night) notes.push("🌙 Night fare ×" + quote.nightMultiplier + " (11 PM – 5 AM).");
+      notes.forEach(function (n) { fb.appendChild(el("p", { class: "muted small", text: n })); });
+    }
+    syncSheet();
+  }
+  /** Fare breakdown table (from the server's pricing engine). */
+  function fareTable(b, title) {
+    var rows = [["Base fare" + (b.includedKm ? " (first " + b.includedKm + " km)" : ""), b.base]];
+    if (b.chargeableKm > 0) rows.push([b.chargeableKm.toFixed(1) + " km × " + rupees2(b.perKm), b.distance]);
+    if (b.traffic > 0) rows.push(["Traffic time " + b.trafficMin.toFixed(1) + " min × " + rupees2(b.perMin), b.traffic]);
+    if (b.nightExtra > 0) rows.push(["Night premium ×" + b.nightMultiplier, b.nightExtra]);
+    if (b.pickupSurcharge > 0) rows.push(["Long pickup (to rider)", b.pickupSurcharge]);
+    if (b.platformFee > 0) rows.push(["Platform fee", b.platformFee]);
+    return el("div", { class: "farebreak" }, el("div", { class: "between" }, el("b", { text: title }), el("b", { text: rupees(b.total) })),
+      rows.map(function (r) { return el("div", { class: "between small" }, el("span", { class: "muted", text: r[0] }), el("span", { text: rupees2(r[1]) })); }));
   }
   $("btnBackHome").onclick = function () { resetPassenger(); };
   $("btnPay").onclick = function () { payIdx = (payIdx + 1) % payModes.length; $("btnPay").textContent = payModes[payIdx][1]; };
@@ -525,7 +547,10 @@
     if (s === "arrived") $("rideStatus").textContent = "Your rider has arrived. Share OTP " + r.otp + " to start";
     if (s === "started") $("rideStatus").textContent = "On the way to " + shortName(r.drop.name);
     if (s !== "requested" && !tripMonitorOn && (!prev || prev.status === "requested")) setTripMonitor(true);
-    if (s === "accepted" && prev && prev.status === "requested") { vibrate(200); toast("Rider " + r.driver.name + " accepted your ride"); fitRide(); }
+    if (s === "accepted" && prev && prev.status === "requested") {
+      vibrate(200); fitRide();
+      toast("Rider " + r.driver.name + " accepted your ride" + (r.pickupSurcharge > 0 ? " · long-pickup charge " + rupees2(r.pickupSurcharge) + " added (fare " + rupees(r.fare) + ")" : ""), 5000);
+    }
     if (s === "arrived" && prev && prev.status !== "arrived") { vibrate(400); beep(); toast("Your rider has arrived"); }
     if (s === "started" && prev && prev.status !== "started") autoShare(r);
   }
@@ -539,6 +564,8 @@
       : r.status === "no_driver" ? "No rider accepted in time. Please try again in a few minutes, or choose another ride type."
       : "Cancelled by " + (r.cancelledBy === "passenger" ? "you" : r.cancelledBy === "driver" ? "the rider" : "SafeShe") + (r.cancelReason ? " · " + r.cancelReason : "");
     $("rateBox").hidden = !ok || !!r.rating;
+    var db = $("doneBreak"); db.innerHTML = "";
+    if (ok && r.breakdown) db.appendChild(fareTable(r.breakdown, "Fare details"));
     renderStars(0);
   }
   function renderStars(n) {
@@ -613,7 +640,8 @@
     list.forEach(function (o) {
       var left = el("span", { class: "muted small" });
       var li = el("li", { class: "offer" },
-        el("div", { class: "top" }, el("b", { text: rupees(o.fare) }), el("span", { class: "pill", text: VEH_ICON[o.vehicle] + " " + VEH_NAME[o.vehicle] })),
+        el("div", { class: "top" }, el("b", { text: rupees(o.fare) }), el("span", { class: "pill", text: (o.night ? "🌙 " : "") + VEH_ICON[o.vehicle] + " " + VEH_NAME[o.vehicle] })),
+        el("div", { class: "small", text: "You keep " + rupees2(o.youKeep != null ? o.youKeep : o.fare) + (o.pickupSurcharge > 0 ? " · incl. " + rupees2(o.pickupSurcharge) + " long-pickup bonus" : "") }),
         el("div", { class: "small muted", text: (o.pickupKm != null ? o.pickupKm + " km to pickup · " : "") + o.distanceKm + " km trip · " + (o.payment === "upi" ? "UPI" : "Cash") }),
         el("div", { class: "addr" }, el("div", { text: "🟢 " + o.pickup.name }), el("div", { text: "🔴 " + o.drop.name })),
         left,
@@ -688,12 +716,47 @@
     api("GET", "/api/rides/history").then(function (r) {
       var day = new Date(); day.setHours(0, 0, 0, 0);
       var today = r.rides.filter(function (x) { return x.status === "completed" && x.completedAt >= day.getTime(); });
-      $("earnToday").textContent = rupees(today.reduce(function (s, x) { return s + x.fare; }, 0));
+      // What the rider keeps: fare minus the platform fee (passed to SafeShe).
+      $("earnToday").textContent = rupees(today.reduce(function (s, x) { return s + (x.driverKeeps != null ? x.driverKeeps : x.fare); }, 0));
       $("ridesToday").textContent = today.length;
     }).catch(function () {});
     api("GET", "/api/me").then(function (r) { me = r.user; renderMe(); $("myRating").textContent = me.driver && me.driver.rating ? "★ " + me.driver.rating : "–"; }).catch(function () {});
-    loadDues();
+    loadDues(); loadPlan();
   }
+
+  // ---------------- rider plan: Tier 1 pay-per-ride, Tier 2 half-day pass, Tier 3 full-day pass
+  var plan = null;
+  function loadPlan() {
+    if (role !== "driver") return;
+    api("GET", "/api/driver/plan").then(function (p) {
+      plan = p; $("planBox").hidden = false;
+      var t = p.tiers;
+      $("btnBuyHalf").textContent = t.half.name + " · " + rupees2(t.half.price) + " / " + t.half.hours + " h";
+      $("btnBuyFull").textContent = t.full.name + " · " + rupees2(t.full.price) + " / " + t.full.hours + " h";
+      if (p.active) {
+        $("planName").textContent = p.active.name + " · unlimited rides";
+        $("planUntil").textContent = "until " + new Date(p.active.endsAt).toLocaleString("en-IN", { hour: "numeric", minute: "2-digit", day: "numeric", month: "short" });
+        $("planUntil").hidden = false; $("planBuy").hidden = true;
+        $("planInfo").textContent = "No per-ride fee while your pass is active. You keep 100% of fares (only the passenger's platform fee goes to SafeShe).";
+      } else {
+        $("planName").textContent = t.perRide.name + " · " + rupees2(t.perRide.fee) + " per completed ride";
+        $("planUntil").hidden = true; $("planBuy").hidden = false;
+        var r = p.today.rides, payPerRide = r * t.perRide.fee;
+        $("planInfo").textContent = "Doing many rides today? A pass costs at most " + rupees2(t.full.price) + " a day, whatever the number of rides." +
+          (r ? " Today so far: " + r + " ride" + (r > 1 ? "s" : "") + " = " + rupees2(payPerRide) + " in per-ride fees." : "");
+      }
+      syncSheet();
+    }).catch(function () {});
+  }
+  function buyPass(kind) {
+    if (!plan) return;
+    var t = plan.tiers[kind];
+    if (!confirm("Buy " + t.name + " for " + rupees2(t.price) + "? It starts now and lasts " + t.hours + " hours. The price is added to your SafeShe dues (pay via UPI).")) return;
+    api("POST", "/api/driver/pass", { kind: kind }).then(function () { toast(t.name + " active. Enjoy unlimited rides!", 4500); loadPlan(); loadDues(); })
+      .catch(function (e) { toast(e.message, 5000); });
+  }
+  $("btnBuyHalf").onclick = function () { buyPass("half"); };
+  $("btnBuyFull").onclick = function () { buyPass("full"); };
 
   // ---------------- rider: commission owed to SafeShe (paid to the admin's UPI ID)
   var dues = null;
@@ -972,7 +1035,9 @@
         c.appendChild(el("div", { class: "kpis" },
           k("Open SOS alerts", s.openSos, s.openSos > 0), k("Active rides", s.activeRides), k("Riders online", s.ridersOnline), k("Riders pending approval", s.ridersPending, s.ridersPending > 0),
           k("Rides today", s.ridesToday), k("Completed today", s.completedToday), k("Revenue today", rupees(s.revenueToday)),
-          k("Commission today", rupees(s.commissionToday)), k("Commission due from riders", rupees(s.commissionDue)), k("Payments to verify", s.paymentsPending, s.paymentsPending > 0),
+          k("SafeShe earnings today", rupees2(s.commissionToday)), k("Platform fees today", rupees2(s.platformFeesToday)), k("Per-ride fees today", rupees2(s.rideFeesToday)),
+          k("Passes sold today", s.passesToday + " · " + rupees2(s.passRevenueToday)),
+          k("Due from riders", rupees2(s.commissionDue)), k("Payments to verify", s.paymentsPending, s.paymentsPending > 0),
           k("Passengers", s.passengers), k("Riders", s.riders)));
         if (s.otpTestMode) c.appendChild(el("p", { class: "testcode", text: "OTP test mode: no SMS provider is configured, so login codes are shown in Settings. Set TWOFACTOR_API_KEY on the server to send real SMS." }));
         c.appendChild(el("h3", { text: "Open SOS alerts" }));
@@ -1060,21 +1125,19 @@
     fares: function (c) {
       return api("GET", "/api/admin/fares").then(function (r) {
         c.innerHTML = "";
-        c.appendChild(el("p", { class: "muted small", text: "Fare = base + per-km × distance + per-min × time, never below the minimum fare. Changes apply to new quotes immediately." }));
+        c.appendChild(el("p", { class: "muted small", text: "Upfront fare = Base fare (covers the first included km) + extra km × per-km rate + platform fee. The per-minute rate is charged only in gridlock. Night premium and long-pickup surcharge are set in Settings → Pricing. Changes apply to new bookings immediately." }));
         var inputs = [];
         var rows = r.fares.map(function (f) {
           var o = { vehicle: f.vehicle };
           function cell(k, type) { var i = el("input", { type: type || "number", step: "0.5", min: "0", value: f[k] }); o[k] = i; return el("td", null, i); }
           var chk = el("input", { type: "checkbox" }); chk.checked = !!f.active; o.active = chk;
-          var ct = el("select", null, el("option", { value: "flat", text: "₹ per ride" }), el("option", { value: "percent", text: "% of fare" })); ct.value = f.commission_type || "flat"; o.commission_type = ct;
           inputs.push(o);
-          return el("tr", null, el("td", { text: VEH_ICON[f.vehicle] }), cell("name", "text"), cell("base"), cell("per_km"), cell("per_min"), cell("min_fare"), cell("commission_value"), el("td", null, ct), el("td", null, chk));
+          return el("tr", null, el("td", { text: VEH_ICON[f.vehicle] }), cell("name", "text"), cell("base"), cell("included_km"), cell("per_km"), cell("per_min"), cell("platform_fee"), cell("min_fare"), el("td", null, chk));
         });
         c.appendChild(el("div", { class: "tablewrap" }, el("table", { class: "fares" },
-          el("tr", null, ["", "Name", "Base ₹", "Per km ₹", "Per min ₹", "Minimum ₹", "Commission", "Type", "Active"].map(function (h) { return el("th", { text: h }); })), rows)));
-        c.appendChild(el("p", { class: "muted small", text: "Commission is what riders pay to SafeShe for each completed ride (e.g. ₹5 per bike ride, or 10 % of the fare). Riders pay it to your UPI ID (Settings → Payments)." }));
+          el("tr", null, ["", "Name", "Base ₹", "Base covers km", "Per km ₹", "Per min ₹ (gridlock)", "Platform fee ₹", "Minimum ₹", "Active"].map(function (h) { return el("th", { text: h }); })), rows)));
         c.appendChild(act("Save fares", "primary", function () {
-          var body = { fares: inputs.map(function (o) { return { vehicle: o.vehicle, name: o.name.value, base: +o.base.value, per_km: +o.per_km.value, per_min: +o.per_min.value, min_fare: +o.min_fare.value, active: o.active.checked, commission_value: +o.commission_value.value, commission_type: o.commission_type.value }; }) };
+          var body = { fares: inputs.map(function (o) { return { vehicle: o.vehicle, name: o.name.value, base: +o.base.value, included_km: +o.included_km.value, per_km: +o.per_km.value, per_min: +o.per_min.value, platform_fee: +o.platform_fee.value, min_fare: +o.min_fare.value, active: o.active.checked }; }) };
           return api("PUT", "/api/admin/fares", body).then(function () { toast("Fares saved"); });
         }));
       });
@@ -1094,6 +1157,35 @@
         }
         if (r.testMode) box.appendChild(r.codes.length ? el("div", { class: "list" }, r.codes.map(function (x) { return el("div", { class: "small", text: x.phone + " → " + x.code + " · " + when(x.at) }); })) : el("p", { class: "muted small", text: "No codes requested yet." }));
         c.appendChild(box);
+        // Pricing rules: night premium, long-pickup surcharge, gridlock trigger, rider plans (tiers)
+        var pr = { night: {}, pickup: {}, gridlock: {}, tiers: { perRide: {}, half: {}, full: {} } };
+        function nf(obj, key, label, step) {
+          var i = el("input", { type: "number", step: step || "1", min: "0" });
+          (nf.list = nf.list || []).push(function () { i.value = obj()[key]; });
+          i.addEventListener("input", function () { obj()[key] = i.value === "" ? "" : +i.value; });
+          return el("label", { class: "small muted" }, label, i);
+        }
+        nf.list = [];
+        var nightOn = el("input", { type: "checkbox" });
+        var pcard = el("section", { class: "card" }, el("h3", { text: "Pricing & rider plans" }),
+          el("p", { class: "small muted", text: "Night premium multiplies base + distance + traffic charges (not the platform fee or pickup surcharge). Times are India time." }),
+          el("label", { class: "check" }, nightOn, " Night premium on"),
+          el("div", { class: "grid2" }, nf(function () { return pr.night; }, "multiplier", "Night multiplier (×)", "0.05"), nf(function () { return pr.night; }, "startHour", "Starts at hour (0–23)"), nf(function () { return pr.night; }, "endHour", "Ends at hour (0–23)")),
+          el("p", { class: "small muted", text: "Long pickup surcharge: added when the rider is far from the passenger; 100% goes to the rider." }),
+          el("div", { class: "grid2" }, nf(function () { return pr.pickup; }, "freeKm", "Free pickup distance (km)", "0.5"), nf(function () { return pr.pickup; }, "perKm", "₹ per extra pickup km", "0.5")),
+          el("p", { class: "small muted", text: "Gridlock trigger: the per-minute rate is charged only while the vehicle is slower than this speed for longer than this many minutes." }),
+          el("div", { class: "grid2" }, nf(function () { return pr.gridlock; }, "speedKmh", "Speed below (km/h)"), nf(function () { return pr.gridlock; }, "minMinutes", "For more than (minutes)")),
+          el("p", { class: "small muted", text: "Rider plans (instead of a % commission)." }),
+          el("div", { class: "grid2" },
+            nf(function () { return pr.tiers.perRide; }, "fee", "Tier 1 · ₹ per completed ride", "0.5"),
+            nf(function () { return pr.tiers.half; }, "price", "Tier 2 · Half-Day Pass ₹"), nf(function () { return pr.tiers.half; }, "hours", "Half-Day Pass hours"),
+            nf(function () { return pr.tiers.full; }, "price", "Tier 3 · Full-Day Pass ₹"), nf(function () { return pr.tiers.full; }, "hours", "Full-Day Pass hours")),
+          act("Save pricing", "primary", function () {
+            pr.night.enabled = nightOn.checked;
+            return api("PUT", "/api/admin/pricing", pr).then(function (v) { pr = v; nf.list.forEach(function (f) { f(); }); toast("Pricing saved"); });
+          }));
+        c.appendChild(pcard);
+        api("GET", "/api/admin/pricing").then(function (v) { pr = v; nightOn.checked = !!v.night.enabled; nf.list.forEach(function (f) { f(); }); }).catch(function () {});
         // Payments: the admin's UPI ID that riders pay their commission to
         var upi = el("input", { type: "text", autocomplete: "off", autocapitalize: "off", placeholder: "your UPI ID, e.g. yourname@okaxis" });
         var pname = el("input", { type: "text", placeholder: "Name shown in the UPI app (e.g. SafeShe)" });

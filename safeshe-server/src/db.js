@@ -122,6 +122,35 @@ const SCHEMA = `
   );
   CREATE UNIQUE INDEX IF NOT EXISTS commission_payments_utr ON commission_payments (UPPER(utr));
   CREATE INDEX IF NOT EXISTS commission_payments_driver ON commission_payments (driver_id, status);
+  -- Pricing v2: base fare covers the first included_km; platform fee per ride (see src/pricing.js).
+  ALTER TABLE fares ADD COLUMN IF NOT EXISTS included_km DOUBLE PRECISION NOT NULL DEFAULT 0;
+  ALTER TABLE fares ADD COLUMN IF NOT EXISTS platform_fee DOUBLE PRECISION NOT NULL DEFAULT 0;
+  -- Fare breakdown, long-pickup surcharge, night premium and gridlock tracking per ride.
+  ALTER TABLE rides ADD COLUMN IF NOT EXISTS upfront_fare DOUBLE PRECISION;
+  ALTER TABLE rides ADD COLUMN IF NOT EXISTS platform_fee DOUBLE PRECISION NOT NULL DEFAULT 0;
+  ALTER TABLE rides ADD COLUMN IF NOT EXISTS pickup_km DOUBLE PRECISION;
+  ALTER TABLE rides ADD COLUMN IF NOT EXISTS pickup_surcharge DOUBLE PRECISION NOT NULL DEFAULT 0;
+  ALTER TABLE rides ADD COLUMN IF NOT EXISTS night BOOLEAN NOT NULL DEFAULT FALSE;
+  ALTER TABLE rides ADD COLUMN IF NOT EXISTS breakdown JSONB;
+  ALTER TABLE rides ADD COLUMN IF NOT EXISTS gridlock JSONB;
+  ALTER TABLE rides ADD COLUMN IF NOT EXISTS tier TEXT;
+  -- Rider subscription passes (Tier 2 half-day, Tier 3 full-day). Tier 1 = pay per ride (rides.commission).
+  CREATE TABLE IF NOT EXISTS driver_passes (
+    id BIGSERIAL PRIMARY KEY,
+    driver_id BIGINT NOT NULL REFERENCES users(id),
+    kind TEXT NOT NULL CHECK (kind IN ('half','full')),
+    price DOUBLE PRECISION NOT NULL,
+    starts_at BIGINT NOT NULL, ends_at BIGINT NOT NULL, created_at BIGINT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS driver_passes_driver ON driver_passes (driver_id, ends_at);
+  -- One-time switch of bike/auto to the v2 rate card (admin can edit afterwards).
+  DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM kv WHERE key = 'ratecard_v2') THEN
+      UPDATE fares SET base = 20, included_km = 2, per_km = 7, per_min = 0.5, platform_fee = 2, min_fare = 0 WHERE vehicle = 'bike';
+      UPDATE fares SET base = 30, included_km = 1.5, per_km = 11, per_min = 0.75, platform_fee = 3, min_fare = 0 WHERE vehicle = 'auto';
+      INSERT INTO kv (key, value) VALUES ('ratecard_v2', '1') ON CONFLICT (key) DO NOTHING;
+    END IF;
+  END $$;
 `;
 
 function connectionString(env) {

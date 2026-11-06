@@ -235,3 +235,11 @@ table.fares input { padding: 6px 8px; min-width: 60px; }
 .duesbox.clear { border-color: #bfe3cc; background: var(--accent-soft); }
 .duesbox .link { padding: 4px 0 0; }
 .upiid { font-family: ui-monospace, monospace; background: #fff; border: 1px dashed var(--line); padding: 2px 6px; border-radius: 6px; }
+/* fare breakdown + rider plan */
+.farebreak { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 8px 0; display: grid; gap: 4px; }
+.farebreak .between { align-items: baseline; }
+.planbox { border: 1px solid #bfe3cc; background: var(--accent-soft); border-radius: 14px; padding: 10px 12px; margin-bottom: 10px; }
+.planbox b { display: block; font-size: 17px; }
+.planbox .row button { flex: 1; min-height: 40px; font-size: 14px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin: 6px 0 10px; }
+.grid2 label { display: flex; flex-direction: column; gap: 4px; }

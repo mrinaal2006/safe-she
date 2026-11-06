@@ -152,6 +152,7 @@
       <div class="dest" id="destText"></div>
       <div class="chips"><button class="chip" id="saveHome">Save as Home</button><button class="chip" id="saveWork">Save as Work</button></div>
       <ul class="rides" id="rides"></ul>
+      <div id="fareBreak"></div>
       <label class="check"><input type="checkbox" id="optShare" checked> Share live trip link with my emergency contact when the ride starts</label>
       <div class="between pay">
         <button class="chip" id="btnPay">💵 Cash</button>
@@ -192,6 +193,7 @@
       <h2 id="doneTitle">You've arrived 🎉</h2>
       <div class="fare"><span>Total fare</span><b id="doneFare"></b></div>
       <p class="muted" id="doneMeta"></p>
+      <div id="doneBreak"></div>
       <div id="rateBox"><p>Rate your rider</p><div class="stars" id="stars"></div></div>
       <button class="primary wide" id="btnDone">Done</button>
     </div>
@@ -208,8 +210,16 @@
         <div><small>Rides</small><b id="ridesToday">0</b></div>
         <div><small>Rating</small><b id="myRating">–</b></div>
       </div>
+      <div class="planbox" id="planBox" hidden>
+        <div class="between"><div><small class="muted">Your plan</small><b id="planName">Casual · ₹3 per ride</b></div><span class="pill" id="planUntil"></span></div>
+        <p class="muted small" id="planInfo"></p>
+        <div class="row" id="planBuy">
+          <button class="ghost" id="btnBuyHalf">Half-Day Pass</button>
+          <button class="primary" id="btnBuyFull">Full-Day Pass</button>
+        </div>
+      </div>
       <div class="duesbox" id="duesBox" hidden>
-        <div class="between"><div><small class="muted">SafeShe commission due</small><b id="duesAmt">₹0</b></div>
+        <div class="between"><div><small class="muted">Due to SafeShe (fees + passes)</small><b id="duesAmt">₹0</b></div>
           <button class="primary small" id="btnPayUpi">Pay via UPI</button></div>
         <p class="muted small" id="duesInfo"></p>
         <div id="utrForm" hidden>

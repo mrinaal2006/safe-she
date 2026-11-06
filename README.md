@@ -10,7 +10,7 @@ A bike, auto and cab booking app with women's-safety features built in. It has t
 | `api/`, `vercel.json`, `package.json` | Vercel deployment from the repository root |
 | [`safeshe-server/`](safeshe-server/README.md) | Server code (Express + Postgres) and its tests |
 | [`safeshe-android/`](safeshe-android/README.md) | Android app (WebView app + native recording, location, SMS, dialling) |
-| `outputs/SafeShe-3.5.apk` | Latest signed APK. It asks for the server address on first launch. |
+| `outputs/SafeShe-3.6.apk` | Latest signed APK. It asks for the server address on first launch. |
 
 ## Deploy on Vercel
 1. **Import:** vercel.com → **Add New → Project** → import `safe-she`.
@@ -38,14 +38,42 @@ A bike, auto and cab booking app with women's-safety features built in. It has t
 Without the key, the server runs in **test mode**: no SMS is sent, and the latest codes are shown in Admin → Settings.
 If you registered your own DLT OTP template with 2Factor, set its name as `TWOFACTOR_TEMPLATE`.
 
-## Rider commission (paid to the admin's UPI ID)
+## Pricing engine
+**Upfront fare = Base fare + (Distance beyond the included km × Per-km rate) + (Traffic minutes × Per-minute rate) + Platform fee**
+
+| | Base fare | Base covers | Per km after that | Per minute (gridlock only) | Platform fee |
+|---|---|---|---|---|---|
+| 🏍️ Bike | ₹20 | first 2 km | ₹7 | ₹0.50 | ₹2 |
+| 🛺 Auto | ₹30 | first 1.5 km | ₹11 | ₹0.75 | ₹3 |
+| 🚗 Cab / Pink Cab | ₹50 / ₹55 | — | ₹15 / ₹16 | ₹1.50 | ₹0 |
+
+- **Gridlock trigger:** the upfront fare has no time charge. During the trip, the server measures speed from the rider's
+  GPS. The per-minute rate is charged only while the vehicle stays **below 8 km/h for more than 3 consecutive minutes**,
+  and then the whole slow stretch is billed. GPS gaps longer than 2 minutes are never billed.
+- **Long pickup surcharge:** if the rider is more than **2.5 km** from the passenger when accepting, **₹1.50 per extra km**
+  is added to the fare. 100% goes to the rider, and the passenger sees it immediately.
+- **Night premium:** **×1.25** on base + distance + traffic charges for rides booked **11 PM – 5 AM** (India time). The
+  platform fee and pickup surcharge are not multiplied.
+- The total is rounded to the nearest rupee. Every value is editable: **Admin → Fares** (rate card) and **Admin →
+  Settings → Pricing & rider plans** (night, pickup, gridlock, tiers).
+
+## Rider plans (instead of a % commission)
+| Tier | Plan | Price |
+|---|---|---|
+| 1 · Casual | Pay per ride (default) | ₹3 per completed trip |
+| 2 · Part-time | Half-Day Pass | ₹15 for 6 hours, unlimited rides |
+| 3 · Full-time | Full-Day Pass | ₹29 for 24 hours, unlimited rides |
+
+Riders buy a pass from their home screen and it starts immediately. A ride counts under a pass if it was accepted while
+the pass was active. Riders keep the whole fare except the passenger's **platform fee**, which they pass on to SafeShe.
+
+## Paying SafeShe (admin's UPI ID)
+What a rider owes = platform fees collected + Tier 1 per-ride fees + passes bought − confirmed payments.
 1. Admin → **Settings → Payments (UPI)**: enter your UPI ID (e.g. `yourname@okaxis`) and the payee name.
    Optionally set a **dues limit**: riders who owe more than this can't go online until they pay.
-2. Admin → **Fares**: set the commission per vehicle, either **₹ per ride** (defaults: bike ₹5, auto ₹6, cab ₹8, Pink Cab ₹8)
-   or **% of fare** (up to 50 %).
-3. Each completed ride adds its commission to the rider's dues. The rider sees **"SafeShe commission due ₹X"** and taps
-   **Pay via UPI**, which opens GPay/PhonePe/Paytm/BHIM with your UPI ID and the amount filled in.
-4. After paying, the rider enters the **UPI reference (UTR)**. You check it in your bank/UPI app and press
+2. The rider sees **"Due to SafeShe ₹X"** and taps **Pay via UPI**, which opens GPay/PhonePe/Paytm/BHIM with your UPI
+   ID and the amount filled in.
+3. After paying, the rider enters the **UPI reference (UTR)**. You check it in your bank/UPI app and press
    **Confirm received** in Admin → **Payments**. The rider is notified and the dues are cleared.
 
 A plain UPI ID can't tell the server automatically that money arrived, so the admin confirms each UTR. Automatic
@@ -53,12 +81,12 @@ verification needs a payment gateway (e.g. Razorpay, Cashfree). Some UPI apps li
 a business/merchant UPI ID works best.
 
 ## Android app
-Install `outputs/SafeShe-3.5.apk` and enter `https://<project>.vercel.app` on first launch, or build it with the
+Install `outputs/SafeShe-3.6.apk` and enter `https://<project>.vercel.app` on first launch, or build it with the
 address built in: `SAFESHE_SERVER_URL=https://<project>.vercel.app ./safeshe-android/build.sh`.
 
 ## Develop / test
 ```bash
 npm install
 DATABASE_URL=postgres://… ADMIN_PASSWORD=… npm start      # http://localhost:8080
-TEST_DATABASE_URL=postgres://…/throwaway npm test          # 35 end-to-end checks (drops that DB's tables)
+TEST_DATABASE_URL=postgres://…/throwaway npm test          # 39 end-to-end checks (drops that DB's tables)
 ```
