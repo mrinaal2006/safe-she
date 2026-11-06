@@ -46,5 +46,5 @@ address built in: `SAFESHE_SERVER_URL=https://<project>.vercel.app ./safeshe-and
 ```bash
 npm install
 DATABASE_URL=postgres://… ADMIN_PASSWORD=… npm start      # http://localhost:8080
-TEST_DATABASE_URL=postgres://…/throwaway npm test          # 29 end-to-end checks (drops that DB's tables)
+TEST_DATABASE_URL=postgres://…/throwaway npm test          # 30 end-to-end checks (drops that DB's tables)
 ```
